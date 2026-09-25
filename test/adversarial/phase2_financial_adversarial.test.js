@@ -155,9 +155,10 @@ test('Adversarial Fase 2 — Transferência pareada: referência entre espaços 
 test('Adversarial Fase 2 — Dupla importação: mesmo payload não duplica contas', () => {
   const { service, ownerCtx } = setupEnv();
   const payload = {
-    accounts: [{ localId: 'acc-1', name: 'Conta Duplicada?' }],
-    categories: [],
+    accounts: [{ id: 'acc-1', name: 'Conta Duplicada?', balance: 0 }],
+    cards: [],
     transactions: [],
+    payments: [],
   };
 
   const first = service.importLocalStorageExport(ownerCtx, { payload });

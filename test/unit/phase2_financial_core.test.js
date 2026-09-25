@@ -200,23 +200,28 @@ test('Exclusão sem histórico remove fisicamente', () => {
   );
 });
 
-test('Importação do slice local: cria contas, categorias e transações e preserva o export original', () => {
+test('Importação do slice local (formato real do MVP): cria contas, cartões, categorias e transações e preserva o export original', () => {
   const { service, editorCtx } = setupEnv();
+  // Formato real gravado em localStorage['moneyflow-state-v1'] pelo MVP
+  // (worktree local-20260925-iniciar-o-moneyflow-como-aplicat): sem `categories`
+  // separado (texto livre por transação) e sem `localId` (o `id` já é a
+  // identidade local).
   const payload = {
     source: 'localstorage_mvp',
-    accounts: [{ localId: 'acc-1', name: 'Conta Importada', openingBalance: 500 }],
-    categories: [{ localId: 'cat-1', name: 'Transporte', kind: 'expense' }],
+    accounts: [{ id: 'acc-1', name: 'Conta Importada', balance: 500 }],
+    cards: [],
     transactions: [
       {
-        localId: 'tx-1',
+        id: 'tx-1',
         type: 'expense',
         description: 'Uber',
         amount: 2000,
         transactionDate: '2026-09-01',
-        accountLocalId: 'acc-1',
-        categoryLocalId: 'cat-1',
+        accountId: 'acc-1',
+        category: 'Transporte',
       },
     ],
+    payments: [],
   };
 
   const result = service.importLocalStorageExport(editorCtx, { payload });
@@ -234,9 +239,10 @@ test('Importação do slice local: cria contas, categorias e transações e pres
 test('Reversão de importação arquiva/soft-deleta apenas as entidades daquele lote', () => {
   const { service, editorCtx } = setupEnv();
   const payload = {
-    accounts: [{ localId: 'acc-1', name: 'Conta a Reverter' }],
-    categories: [],
+    accounts: [{ id: 'acc-1', name: 'Conta a Reverter', balance: 0 }],
+    cards: [],
     transactions: [],
+    payments: [],
   };
   const result = service.importLocalStorageExport(editorCtx, { payload });
   const reversal = service.reverseImportBatch(editorCtx, { batchId: result.batchId });

@@ -99,6 +99,79 @@ export class SpaceIsolationService {
   }
 
   // =========================================================================
+  // ATOMICIDADE ANINHADA E RECÁLCULO DE SALDO (FASE 2 - ECO-62, correção)
+  //
+  // `_runAtomic` usa SAVEPOINT em vez de BEGIN/COMMIT porque SQLite não permite
+  // transações aninhadas: vários métodos (createTransfer, createCardTransaction,
+  // registerInvoicePayment, importLocalStorageExport...) já abrem sua própria
+  // BEGIN TRANSACTION e chamam createTransaction/updateTransaction/
+  // deleteTransaction internamente. SAVEPOINT funciona tanto isolado (abre uma
+  // transação implícita) quanto aninhado dentro de uma transação já aberta,
+  // então o mesmo helper serve os dois casos sem duplicar lógica.
+  // =========================================================================
+
+  _runAtomic(fn) {
+    const savepoint = `sp_${randomUUID().replace(/-/g, '')}`;
+    this.db.exec(`SAVEPOINT ${savepoint};`);
+    try {
+      const result = fn();
+      this.db.exec(`RELEASE SAVEPOINT ${savepoint};`);
+      return result;
+    } catch (err) {
+      this.db.exec(`ROLLBACK TO SAVEPOINT ${savepoint};`);
+      this.db.exec(`RELEASE SAVEPOINT ${savepoint};`);
+      throw err;
+    }
+  }
+
+  /**
+   * Recalcula `accounts.current_balance` a partir de `opening_balance` mais a
+   * soma de TODOS os movimentos de CAIXA não excluídos daquela conta — nunca de
+   * competência. Por isso `card_purchase` nunca entra aqui (fica só na fatura,
+   * como competência, até ser pago) e `card_payment` sempre entra (é o caixa
+   * saindo de fato). Transferência soma pela perna (a própria linha já carrega
+   * o sinal certo via `destination_account_id`: presente = perna de origem,
+   * ausente = perna de destino), nunca as duas pernas na mesma conta.
+   *
+   * Sempre filtra por `space_id` junto do `accountId`: uma conta de outro
+   * espaço (ou inexistente) nunca é tocada. Idempotente e sem efeito colateral
+   * quando `accountId` é nulo (ex: compra de cartão, que não movimenta conta).
+   */
+  _recalculateAccountBalance(spaceId, accountId) {
+    if (!accountId) return;
+
+    const account = this.db
+      .prepare('SELECT opening_balance FROM accounts WHERE id = ? AND space_id = ?')
+      .get(accountId, spaceId);
+    if (!account) return; // Nunca recalcula conta de outro espaço ou inexistente.
+
+    const { movement } = this.db
+      .prepare(
+        `SELECT COALESCE(SUM(
+          CASE
+            WHEN type = 'income' THEN amount
+            WHEN type = 'expense' THEN -amount
+            WHEN type = 'card_payment' THEN -amount
+            WHEN type = 'refund' THEN amount
+            WHEN type = 'transfer' AND destination_account_id IS NOT NULL THEN -amount
+            WHEN type = 'transfer' AND destination_account_id IS NULL THEN amount
+            ELSE 0
+          END
+        ), 0) as movement
+        FROM transactions
+        WHERE space_id = ? AND account_id = ? AND deleted_at IS NULL`,
+      )
+      .get(spaceId, accountId);
+
+    const newBalance = account.opening_balance + movement;
+    this.db
+      .prepare("UPDATE accounts SET current_balance = ?, updated_at = datetime('now') WHERE id = ? AND space_id = ?")
+      .run(newBalance, accountId, spaceId);
+
+    return newBalance;
+  }
+
+  // =========================================================================
   // USUÁRIOS E SESSÕES
   // =========================================================================
 
@@ -158,8 +231,7 @@ export class SpaceIsolationService {
       'INSERT INTO space_members (id, space_id, user_id, role, status) VALUES (?, ?, ?, ?, ?)',
     );
 
-    this.db.exec('BEGIN TRANSACTION;');
-    try {
+    return this._runAtomic(() => {
       spaceInsert.run(id, name, ownerUserId, currency, timezone);
       memberInsert.run(randomUUID(), id, ownerUserId, Roles.OWNER, 'active');
       this.logAudit({
@@ -170,12 +242,8 @@ export class SpaceIsolationService {
         entityId: id,
         newData: { id, name, ownerUserId, currency, timezone },
       });
-      this.db.exec('COMMIT;');
       return this.getSpace(id);
-    } catch (err) {
-      this.db.exec('ROLLBACK;');
-      throw err;
-    }
+    });
   }
 
   getSpace(id) {
@@ -594,38 +662,44 @@ export class SpaceIsolationService {
       }
     }
 
-    this.db
-      .prepare(
-        `INSERT INTO transactions (
-          id, space_id, type, description, amount, account_id, credit_card_id,
-          category_id, destination_account_id, transaction_date, observation, tags
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        id,
-        authContext.spaceId,
-        type,
-        description,
-        amount,
-        accountId,
-        creditCardId,
-        categoryId,
-        destinationAccountId,
-        transactionDate,
-        observation,
-        JSON.stringify(tags),
-      );
+    return this._runAtomic(() => {
+      this.db
+        .prepare(
+          `INSERT INTO transactions (
+            id, space_id, type, description, amount, account_id, credit_card_id,
+            category_id, destination_account_id, transaction_date, observation, tags
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          id,
+          authContext.spaceId,
+          type,
+          description,
+          amount,
+          accountId,
+          creditCardId,
+          categoryId,
+          destinationAccountId,
+          transactionDate,
+          observation,
+          JSON.stringify(tags),
+        );
 
-    this.logAudit({
-      spaceId: authContext.spaceId,
-      actorUserId: authContext.userId,
-      action: 'transaction.create',
-      entityType: 'transactions',
-      entityId: id,
-      newData: { id, type, description, amount, transactionDate },
+      // Recálculo atômico de saldo: mesma unidade de trabalho do INSERT (via
+      // SAVEPOINT), nunca um passo solto que possa ficar dessincronizado.
+      this._recalculateAccountBalance(authContext.spaceId, accountId);
+
+      this.logAudit({
+        spaceId: authContext.spaceId,
+        actorUserId: authContext.userId,
+        action: 'transaction.create',
+        entityType: 'transactions',
+        entityId: id,
+        newData: { id, type, description, amount, transactionDate },
+      });
+
+      return this.getTransaction(authContext, id);
     });
-
-    return this.getTransaction(authContext, id);
   }
 
   getTransaction(authContext, transactionId) {
@@ -678,21 +752,28 @@ export class SpaceIsolationService {
     setClauses.push("updated_at = datetime('now')");
     values.push(transactionId, authContext.spaceId);
 
-    this.db
-      .prepare(`UPDATE transactions SET ${setClauses.join(', ')} WHERE id = ? AND space_id = ?`)
-      .run(...values);
+    return this._runAtomic(() => {
+      this.db
+        .prepare(`UPDATE transactions SET ${setClauses.join(', ')} WHERE id = ? AND space_id = ?`)
+        .run(...values);
 
-    this.logAudit({
-      spaceId: authContext.spaceId,
-      actorUserId: authContext.userId,
-      action: 'transaction.update',
-      entityType: 'transactions',
-      entityId: transactionId,
-      oldData: existing,
-      newData: updates,
+      // `amount` é o único campo editável que afeta o caixa; recalcular sempre
+      // é barato e mantém current_balance consistente sem precisar decidir
+      // caso a caso quais campos "sujam" o saldo.
+      this._recalculateAccountBalance(authContext.spaceId, existing.account_id);
+
+      this.logAudit({
+        spaceId: authContext.spaceId,
+        actorUserId: authContext.userId,
+        action: 'transaction.update',
+        entityType: 'transactions',
+        entityId: transactionId,
+        oldData: existing,
+        newData: updates,
+      });
+
+      return this.getTransaction(authContext, transactionId);
     });
-
-    return this.getTransaction(authContext, transactionId);
   }
 
   /**
@@ -702,20 +783,24 @@ export class SpaceIsolationService {
     requireAuthorization(authContext, Permissions.TRANSACTIONS_WRITE);
     const existing = this.getTransaction(authContext, transactionId);
 
-    this.db
-      .prepare("UPDATE transactions SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND space_id = ?")
-      .run(transactionId, authContext.spaceId);
+    return this._runAtomic(() => {
+      this.db
+        .prepare("UPDATE transactions SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND space_id = ?")
+        .run(transactionId, authContext.spaceId);
 
-    this.logAudit({
-      spaceId: authContext.spaceId,
-      actorUserId: authContext.userId,
-      action: 'transaction.delete',
-      entityType: 'transactions',
-      entityId: transactionId,
-      oldData: existing,
+      this._recalculateAccountBalance(authContext.spaceId, existing.account_id);
+
+      this.logAudit({
+        spaceId: authContext.spaceId,
+        actorUserId: authContext.userId,
+        action: 'transaction.delete',
+        entityType: 'transactions',
+        entityId: transactionId,
+        oldData: existing,
+      });
+
+      return { deleted: true, id: transactionId };
     });
-
-    return { deleted: true, id: transactionId };
   }
 
   /**
@@ -815,8 +900,7 @@ export class SpaceIsolationService {
       throw new AppError(ErrorCodes.VALIDATION_ERROR, 'É necessário informar ao menos uma tag.', 400);
     }
 
-    this.db.exec('BEGIN TRANSACTION;');
-    try {
+    this._runAtomic(() => {
       const tagIds = tagNames.map((name) => this.createTag(authContext, { name }).id);
       const insertLink = this.db.prepare(
         'INSERT OR IGNORE INTO transaction_tags (space_id, transaction_id, tag_id) VALUES (?, ?, ?)',
@@ -833,12 +917,7 @@ export class SpaceIsolationService {
           insertLink.run(authContext.spaceId, transactionId, tagId);
         }
       }
-
-      this.db.exec('COMMIT;');
-    } catch (err) {
-      this.db.exec('ROLLBACK;');
-      throw err;
-    }
+    });
 
     return transactionIds.map((transactionId) => ({
       transactionId,
@@ -904,8 +983,7 @@ export class SpaceIsolationService {
     const sourceTransactionId = randomUUID();
     const destinationTransactionId = randomUUID();
 
-    this.db.exec('BEGIN TRANSACTION;');
-    try {
+    return this._runAtomic(() => {
       this.createTransaction(authContext, {
         id: sourceTransactionId,
         type: 'transfer',
@@ -954,12 +1032,8 @@ export class SpaceIsolationService {
         newData: { sourceAccountId, destinationAccountId, amount, transferDate },
       });
 
-      this.db.exec('COMMIT;');
       return this.getTransfer(authContext, id);
-    } catch (err) {
-      this.db.exec('ROLLBACK;');
-      throw err;
-    }
+    });
   }
 
   getTransfer(authContext, transferId) {
@@ -1037,8 +1111,7 @@ export class SpaceIsolationService {
 
     const invoice = this.getOrCreateOpenInvoice(authContext, creditCardId, transactionDate);
 
-    this.db.exec('BEGIN TRANSACTION;');
-    try {
+    return this._runAtomic(() => {
       this.createTransaction(authContext, {
         id,
         type,
@@ -1082,12 +1155,8 @@ export class SpaceIsolationService {
         newData: { creditCardId, amount, invoiceId: invoice.id },
       });
 
-      this.db.exec('COMMIT;');
       return this.getTransaction(authContext, id);
-    } catch (err) {
-      this.db.exec('ROLLBACK;');
-      throw err;
-    }
+    });
   }
 
   getInvoicePaymentSummary(authContext, invoiceId) {
@@ -1133,8 +1202,7 @@ export class SpaceIsolationService {
 
     const transactionId = randomUUID();
 
-    this.db.exec('BEGIN TRANSACTION;');
-    try {
+    return this._runAtomic(() => {
       this.createTransaction(authContext, {
         id: transactionId,
         type: 'card_payment',
@@ -1171,12 +1239,8 @@ export class SpaceIsolationService {
         newData: { invoiceId, amount, paymentDate },
       });
 
-      this.db.exec('COMMIT;');
       return { ...this.getInvoicePaymentSummary(authContext, invoiceId), duplicate: false, paymentId: id };
-    } catch (err) {
-      this.db.exec('ROLLBACK;');
-      throw err;
-    }
+    });
   }
 
   /**
@@ -1194,14 +1258,21 @@ export class SpaceIsolationService {
 
     const invoice = this.getCreditCardInvoice(authContext, payment.credit_card_invoice_id);
 
-    this.db.exec('BEGIN TRANSACTION;');
-    try {
+    return this._runAtomic(() => {
       this.db.prepare("UPDATE invoice_payments SET reversed_at = datetime('now') WHERE id = ?").run(paymentId);
 
       if (payment.transaction_id) {
+        const paymentTransaction = this.db
+          .prepare('SELECT account_id FROM transactions WHERE id = ? AND space_id = ?')
+          .get(payment.transaction_id, authContext.spaceId);
+
         this.db
           .prepare("UPDATE transactions SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND space_id = ?")
           .run(payment.transaction_id, authContext.spaceId);
+
+        // Desfazer o pagamento devolve o dinheiro à conta pagadora (mesma
+        // transação SQL do soft-delete acima, atômico com o resto do uninform).
+        this._recalculateAccountBalance(authContext.spaceId, paymentTransaction?.account_id ?? null);
       }
 
       const owed = invoice.total_charges - invoice.total_credits;
@@ -1227,12 +1298,8 @@ export class SpaceIsolationService {
         oldData: { amount: payment.amount },
       });
 
-      this.db.exec('COMMIT;');
       return this.getInvoicePaymentSummary(authContext, invoice.id);
-    } catch (err) {
-      this.db.exec('ROLLBACK;');
-      throw err;
-    }
+    });
   }
 
   // =========================================================================
@@ -1260,8 +1327,7 @@ export class SpaceIsolationService {
     const base = Math.floor(totalAmount / installmentsCount);
     const remainder = totalAmount - base * installmentsCount;
 
-    this.db.exec('BEGIN TRANSACTION;');
-    try {
+    return this._runAtomic(() => {
       this.db
         .prepare(
           `INSERT INTO installment_plans (
@@ -1321,12 +1387,8 @@ export class SpaceIsolationService {
         newData: { totalAmount, installmentsCount },
       });
 
-      this.db.exec('COMMIT;');
       return this.getInstallmentPlan(authContext, id);
-    } catch (err) {
-      this.db.exec('ROLLBACK;');
-      throw err;
-    }
+    });
   }
 
   getInstallmentPlan(authContext, planId) {
@@ -1508,8 +1570,7 @@ export class SpaceIsolationService {
     const recurrence = this.getRecurrence(authContext, occurrence.recurrence_id);
     const transactionId = randomUUID();
 
-    this.db.exec('BEGIN TRANSACTION;');
-    try {
+    return this._runAtomic(() => {
       this.createTransaction(authContext, {
         id: transactionId,
         type: recurrence.type,
@@ -1538,12 +1599,8 @@ export class SpaceIsolationService {
         newData: { transactionId },
       });
 
-      this.db.exec('COMMIT;');
       return this.getTransaction(authContext, transactionId);
-    } catch (err) {
-      this.db.exec('ROLLBACK;');
-      throw err;
-    }
+    });
   }
 
   // =========================================================================
@@ -1675,20 +1732,65 @@ export class SpaceIsolationService {
   // =========================================================================
   // IMPORTAÇÃO IDEMPOTENTE DO SLICE LOCAL (MVP EM localStorage) (FASE 2 - ECO-62)
   //
-  // Contrato do payload aceito (definido nesta fase, ver decisões da Fase 2):
+  // Formato REAL persistido em `localStorage.setItem('moneyflow-state-v1', ...)`,
+  // confirmado lendo o worktree do MVP (local-20260925-iniciar-o-moneyflow-como-
+  // aplicat, `src/main.js` + `src/domain/finance.js`) — substituiu o contrato
+  // hipotético desta fase, que nunca existiu de verdade em produção:
+  //
   // {
-  //   source?: string,
-  //   accounts: [{ localId, name, accountType?, openingBalance? }],
-  //   categories: [{ localId, name, kind, parentLocalId? }],
-  //   transactions: [{ localId, type, description, amount, transactionDate,
-  //                     accountLocalId?, categoryLocalId?, observation?, tags? }]
+  //   accounts: [{ id, name, institution?, type?, balance, source? }],
+  //   cards: [{ id, name, brand?, closingDay, dueDay, creditLimit?, paymentAccountId?, source? }],
+  //   transactions: [{ id, type, description, amount, transactionDate,
+  //                     accountId?, creditCardId?, invoiceId?, category?, source? }],
+  //   payments: [{ id, invoiceId, fromAccountId, amount, paymentDate, source?, externalTransactionId?, status? }]
   // }
   //
-  // Garantias: idempotente (checksum do payload bruto), validado (linhas
-  // inválidas são contadas em `skipped`, nunca inventadas), reversível
-  // (import_entities permite arquivar/soft-delete tudo que foi criado) e o
-  // export original é preservado integralmente em `raw_payload`.
+  // Diferenças importantes em relação ao que se imaginaria:
+  // - NÃO existe `categories`: categoria é texto livre por transação
+  //   (`transaction.category`), resolvido/criado aqui por nome (kind inferido:
+  //   'income' para type='income', 'expense' para os demais).
+  // - NÃO existe `localId`: o `id` de cada entidade JÁ é a identidade local,
+  //   reaproveitada diretamente como FK por outras entidades.
+  // - `payments[]` é a fonte de verdade do pagamento de fatura. A UI do MVP
+  //   também grava, em paralelo, uma transação espelho `type: 'card_payment'`
+  //   para o MESMO evento de caixa (ver app.addEventListener('submit', ...) em
+  //   src/main.js do MVP) — importar as duas duplicaria o débito. Por isso
+  //   `payments[]` é processado via `registerInvoicePayment` (que já gera sua
+  //   própria transação `card_payment`), e linhas `type: 'card_payment'` de
+  //   `transactions[]` são puladas de propósito (não contam como inválidas).
+  // - `payment.invoiceId` segue o formato `${card.id}-${closingDateISO}` (ver
+  //   `getInvoiceForPurchase` no MVP); o cartão e a data de fechamento são
+  //   resolvidos a partir desse prefixo, sem inventar um `creditCardId` que o
+  //   MVP nunca gravou no pagamento.
+  //
+  // Garantias mantidas: idempotente (checksum do payload bruto), validado
+  // (linhas inválidas contadas em `skipped`, nunca inventadas), reversível
+  // (import_entities rastreia contas/cartões/categorias/transações criadas —
+  // ver migration 004 para o `entity_type = 'credit_cards'`), o export
+  // original é preservado integralmente em `raw_payload`, isolamento por
+  // `space_id` reaproveitado de cada método chamado (createAccount,
+  // createCreditCard, createCategory, createTransaction, createCardTransaction,
+  // registerInvoicePayment) e `current_balance` recalculado atomicamente por
+  // cada uma dessas chamadas (ver `_recalculateAccountBalance`), sem contar
+  // `card_purchase` (competência) como caixa.
   // =========================================================================
+
+  _resolveOrCreateCategoryByName(authContext, name, kind, cache) {
+    const cacheKey = `${kind}::${name}`;
+    if (cache.has(cacheKey)) return { id: cache.get(cacheKey), created: false };
+
+    const existing = this.db
+      .prepare('SELECT id FROM categories WHERE space_id = ? AND name = ? AND kind = ? AND archived_at IS NULL')
+      .get(authContext.spaceId, name, kind);
+    if (existing) {
+      cache.set(cacheKey, existing.id);
+      return { id: existing.id, created: false };
+    }
+
+    const createdCategory = this.createCategory(authContext, { name, kind });
+    cache.set(cacheKey, createdCategory.id);
+    return { id: createdCategory.id, created: true };
+  }
 
   importLocalStorageExport(authContext, { payload }) {
     requireAuthorization(authContext, Permissions.TRANSACTIONS_WRITE);
@@ -1696,13 +1798,14 @@ export class SpaceIsolationService {
     if (!payload || typeof payload !== 'object') {
       throw new AppError(ErrorCodes.IMPORT_INVALID_PAYLOAD, 'Payload de importação ausente ou inválido.', 400);
     }
-    if (!Array.isArray(payload.accounts) || !Array.isArray(payload.categories) || !Array.isArray(payload.transactions)) {
+    if (!Array.isArray(payload.accounts) || !Array.isArray(payload.cards) || !Array.isArray(payload.transactions)) {
       throw new AppError(
         ErrorCodes.IMPORT_INVALID_PAYLOAD,
-        'Payload deve conter as listas accounts, categories e transactions.',
+        'Payload deve conter as listas accounts, cards e transactions (formato real do slice local do MVP).',
         400,
       );
     }
+    const payments = Array.isArray(payload.payments) ? payload.payments : [];
 
     const raw = JSON.stringify(payload);
     const checksum = createHash('sha256').update(raw).digest('hex');
@@ -1715,30 +1818,34 @@ export class SpaceIsolationService {
         batchId: existingBatch.id,
         duplicate: true,
         importedAccounts: existingBatch.imported_accounts,
+        importedCards: existingBatch.imported_cards,
         importedCategories: existingBatch.imported_categories,
         importedTransactions: existingBatch.imported_transactions,
+        importedPayments: existingBatch.imported_payments,
         skipped: existingBatch.skipped_count,
       };
     }
 
     const batchId = randomUUID();
-    const localToRealAccount = new Map();
-    const localToRealCategory = new Map();
+    const accountIdMap = new Map(); // id local do MVP -> id real
+    const cardIdMap = new Map();
+    const categoryCache = new Map();
     let importedAccounts = 0;
+    let importedCards = 0;
     let importedCategories = 0;
     let importedTransactions = 0;
+    let importedPayments = 0;
     let skipped = 0;
 
-    this.db.exec('BEGIN TRANSACTION;');
-    try {
+    return this._runAtomic(() => {
       // O lote é criado ANTES das entidades para satisfazer a FK de import_entities.batch_id;
       // os contadores finais são atualizados ao término do processamento.
       this.db
         .prepare(
           `INSERT INTO import_batches (
             id, space_id, source, checksum, raw_payload, status,
-            imported_accounts, imported_categories, imported_transactions, skipped_count
-          ) VALUES (?, ?, ?, ?, ?, 'completed', 0, 0, 0, 0)`,
+            imported_accounts, imported_cards, imported_categories, imported_transactions, imported_payments, skipped_count
+          ) VALUES (?, ?, ?, ?, ?, 'completed', 0, 0, 0, 0, 0, 0)`,
         )
         .run(batchId, authContext.spaceId, payload.source || 'localstorage_mvp', checksum, raw);
 
@@ -1746,68 +1853,172 @@ export class SpaceIsolationService {
         'INSERT INTO import_entities (id, space_id, batch_id, entity_type, entity_id) VALUES (?, ?, ?, ?, ?)',
       );
 
+      // 1. Contas
       for (const acc of payload.accounts) {
-        if (!acc || !acc.localId || !acc.name) {
+        if (!acc || !acc.id || !acc.name || typeof acc.balance !== 'number') {
           skipped += 1;
           continue;
         }
         const created = this.createAccount(authContext, {
           name: acc.name,
-          openingBalance: acc.openingBalance || 0,
-          accountType: acc.accountType || 'checking',
+          openingBalance: Math.round(acc.balance),
+          accountType: acc.type || 'checking',
         });
-        localToRealAccount.set(acc.localId, created.id);
+        accountIdMap.set(acc.id, created.id);
         trackEntity.run(randomUUID(), authContext.spaceId, batchId, 'accounts', created.id);
         importedAccounts += 1;
       }
 
-      for (const cat of payload.categories) {
-        if (!cat || !cat.localId || !cat.name || !['expense', 'income'].includes(cat.kind)) {
+      // 2. Cartões (paymentAccountId, quando presente, precisa resolver dentro do lote)
+      for (const card of payload.cards) {
+        const closingDay = Number(card?.closingDay);
+        const dueDay = Number(card?.dueDay);
+        const validDays = Number.isInteger(closingDay) && closingDay >= 1 && closingDay <= 31
+          && Number.isInteger(dueDay) && dueDay >= 1 && dueDay <= 31;
+        if (!card || !card.id || !card.name || !validDays) {
           skipped += 1;
           continue;
         }
-        const parentId = cat.parentLocalId ? localToRealCategory.get(cat.parentLocalId) || null : null;
-        const created = this.createCategory(authContext, { name: cat.name, kind: cat.kind, parentId });
-        localToRealCategory.set(cat.localId, created.id);
-        trackEntity.run(randomUUID(), authContext.spaceId, batchId, 'categories', created.id);
-        importedCategories += 1;
+        if (card.paymentAccountId && !accountIdMap.has(card.paymentAccountId)) {
+          skipped += 1; // referência a conta não resolvida dentro do próprio lote
+          continue;
+        }
+        const created = this.createCreditCard(authContext, {
+          name: card.name,
+          brand: card.brand || null,
+          closingDay,
+          dueDay,
+          creditLimit: typeof card.creditLimit === 'number' ? Math.round(card.creditLimit) : null,
+          paymentAccountId: card.paymentAccountId ? accountIdMap.get(card.paymentAccountId) : null,
+        });
+        cardIdMap.set(card.id, created.id);
+        trackEntity.run(randomUUID(), authContext.spaceId, batchId, 'credit_cards', created.id);
+        importedCards += 1;
       }
 
+      // 3. Transações (categoria resolvida/criada por nome; card_payment é pulado de
+      //    propósito — ver nota de topo — e nunca conta como inválido/skipped)
       for (const tx of payload.transactions) {
-        if (!tx || !tx.localId || !tx.type || !tx.description || tx.amount === undefined || !tx.transactionDate) {
-          skipped += 1;
-          continue;
-        }
-        if (tx.accountLocalId && !localToRealAccount.has(tx.accountLocalId)) {
-          skipped += 1;
-          continue;
-        }
-        if (tx.categoryLocalId && !localToRealCategory.has(tx.categoryLocalId)) {
+        if (!tx || !tx.id || !tx.type || !tx.description || typeof tx.amount !== 'number' || !tx.transactionDate) {
           skipped += 1;
           continue;
         }
 
-        const created = this.createTransaction(authContext, {
-          type: tx.type,
-          description: tx.description,
-          amount: tx.amount,
-          accountId: tx.accountLocalId ? localToRealAccount.get(tx.accountLocalId) : null,
-          categoryId: tx.categoryLocalId ? localToRealCategory.get(tx.categoryLocalId) : null,
-          transactionDate: tx.transactionDate,
-          observation: tx.observation || null,
-          tags: tx.tags || [],
+        if (tx.type === 'card_payment') {
+          continue;
+        }
+
+        const categoryKind = tx.type === 'income' ? 'income' : 'expense';
+        let categoryId = null;
+        if (tx.category) {
+          const resolved = this._resolveOrCreateCategoryByName(authContext, tx.category, categoryKind, categoryCache);
+          categoryId = resolved.id;
+          if (resolved.created) {
+            trackEntity.run(randomUUID(), authContext.spaceId, batchId, 'categories', resolved.id);
+            importedCategories += 1;
+          }
+        }
+
+        if (tx.type === 'expense' || tx.type === 'income') {
+          const accountId = tx.accountId ? accountIdMap.get(tx.accountId) : null;
+          if (tx.accountId && !accountId) {
+            skipped += 1;
+            continue;
+          }
+          const created = this.createTransaction(authContext, {
+            type: tx.type,
+            description: tx.description,
+            amount: Math.round(tx.amount),
+            accountId,
+            categoryId,
+            transactionDate: tx.transactionDate,
+          });
+          trackEntity.run(randomUUID(), authContext.spaceId, batchId, 'transactions', created.id);
+          importedTransactions += 1;
+          continue;
+        }
+
+        if (tx.type === 'card_purchase' || tx.type === 'refund') {
+          const creditCardId = tx.creditCardId ? cardIdMap.get(tx.creditCardId) : null;
+          if (!creditCardId) {
+            skipped += 1; // compra/estorno de cartão sem cartão resolvido no lote
+            continue;
+          }
+          const created = this.createCardTransaction(authContext, {
+            type: tx.type,
+            creditCardId,
+            amount: Math.round(tx.amount),
+            description: tx.description,
+            categoryId,
+            transactionDate: tx.transactionDate,
+          });
+          trackEntity.run(randomUUID(), authContext.spaceId, batchId, 'transactions', created.id);
+          importedTransactions += 1;
+          continue;
+        }
+
+        skipped += 1; // tipo desconhecido: nunca inventa comportamento para ele
+      }
+
+      // 4. Pagamentos de fatura (fonte de verdade do evento de caixa — ver nota de topo)
+      for (const payment of payments) {
+        if (
+          !payment || !payment.invoiceId || !payment.fromAccountId
+          || typeof payment.amount !== 'number' || payment.amount <= 0 || !payment.paymentDate
+        ) {
+          skipped += 1;
+          continue;
+        }
+
+        const accountId = accountIdMap.get(payment.fromAccountId);
+        if (!accountId) {
+          skipped += 1;
+          continue;
+        }
+
+        // payment.invoiceId = `${card.id}-${closingDateISO}` no formato real do MVP.
+        const cardLocalEntry = payload.cards.find(
+          (card) => card?.id && payment.invoiceId.startsWith(`${card.id}-`),
+        );
+        const realCardId = cardLocalEntry ? cardIdMap.get(cardLocalEntry.id) : null;
+        if (!realCardId) {
+          skipped += 1;
+          continue;
+        }
+
+        const closingDateFragment = payment.invoiceId.slice(cardLocalEntry.id.length + 1);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(closingDateFragment)) {
+          skipped += 1;
+          continue;
+        }
+
+        const invoice = this.getOrCreateOpenInvoice(authContext, realCardId, closingDateFragment);
+        const result = this.registerInvoicePayment(authContext, {
+          invoiceId: invoice.id,
+          amount: Math.round(payment.amount),
+          paymentDate: payment.paymentDate,
+          accountId,
         });
-        trackEntity.run(randomUUID(), authContext.spaceId, batchId, 'transactions', created.id);
-        importedTransactions += 1;
+
+        if (!result.duplicate) {
+          const paymentRow = this.db
+            .prepare('SELECT transaction_id FROM invoice_payments WHERE id = ?')
+            .get(result.paymentId);
+          if (paymentRow?.transaction_id) {
+            trackEntity.run(randomUUID(), authContext.spaceId, batchId, 'transactions', paymentRow.transaction_id);
+          }
+          importedPayments += 1;
+        }
       }
 
       this.db
         .prepare(
           `UPDATE import_batches
-           SET imported_accounts = ?, imported_categories = ?, imported_transactions = ?, skipped_count = ?
+           SET imported_accounts = ?, imported_cards = ?, imported_categories = ?,
+               imported_transactions = ?, imported_payments = ?, skipped_count = ?
            WHERE id = ?`,
         )
-        .run(importedAccounts, importedCategories, importedTransactions, skipped, batchId);
+        .run(importedAccounts, importedCards, importedCategories, importedTransactions, importedPayments, skipped, batchId);
 
       this.logAudit({
         spaceId: authContext.spaceId,
@@ -1815,15 +2026,20 @@ export class SpaceIsolationService {
         action: 'import.create',
         entityType: 'import_batches',
         entityId: batchId,
-        newData: { importedAccounts, importedCategories, importedTransactions, skipped },
+        newData: { importedAccounts, importedCards, importedCategories, importedTransactions, importedPayments, skipped },
       });
 
-      this.db.exec('COMMIT;');
-      return { batchId, duplicate: false, importedAccounts, importedCategories, importedTransactions, skipped };
-    } catch (err) {
-      this.db.exec('ROLLBACK;');
-      throw err;
-    }
+      return {
+        batchId,
+        duplicate: false,
+        importedAccounts,
+        importedCards,
+        importedCategories,
+        importedTransactions,
+        importedPayments,
+        skipped,
+      };
+    });
   }
 
   getImportBatch(authContext, batchId) {
@@ -1853,10 +2069,18 @@ export class SpaceIsolationService {
       .prepare('SELECT * FROM import_entities WHERE batch_id = ? AND space_id = ?')
       .all(batchId, authContext.spaceId);
 
-    this.db.exec('BEGIN TRANSACTION;');
-    try {
+    return this._runAtomic(() => {
+      const affectedAccountIds = new Set();
+
       for (const entity of entities) {
         if (entity.entity_type === 'transactions') {
+          // Captura a conta afetada ANTES do soft-delete para poder recalcular
+          // o saldo depois, sem depender de um valor já apagado logicamente.
+          const tx = this.db
+            .prepare('SELECT account_id FROM transactions WHERE id = ? AND space_id = ?')
+            .get(entity.entity_id, authContext.spaceId);
+          if (tx?.account_id) affectedAccountIds.add(tx.account_id);
+
           this.db
             .prepare("UPDATE transactions SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND space_id = ?")
             .run(entity.entity_id, authContext.spaceId);
@@ -1868,7 +2092,15 @@ export class SpaceIsolationService {
           this.db
             .prepare("UPDATE categories SET archived_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND space_id = ?")
             .run(entity.entity_id, authContext.spaceId);
+        } else if (entity.entity_type === 'credit_cards') {
+          this.db
+            .prepare("UPDATE credit_cards SET archived_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND space_id = ?")
+            .run(entity.entity_id, authContext.spaceId);
         }
+      }
+
+      for (const accountId of affectedAccountIds) {
+        this._recalculateAccountBalance(authContext.spaceId, accountId);
       }
 
       this.db.prepare("UPDATE import_batches SET status = 'reversed', reversed_at = datetime('now') WHERE id = ?").run(batchId);
@@ -1882,12 +2114,8 @@ export class SpaceIsolationService {
         newData: { entitiesCount: entities.length },
       });
 
-      this.db.exec('COMMIT;');
       return { batchId, reversed: true, entitiesCount: entities.length };
-    } catch (err) {
-      this.db.exec('ROLLBACK;');
-      throw err;
-    }
+    });
   }
 
   // =========================================================================
