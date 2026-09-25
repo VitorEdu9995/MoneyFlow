@@ -10,10 +10,14 @@
 import { DatabaseSync } from 'node:sqlite';
 import * as initialSchema from './migrations/001_initial_schema.js';
 import * as customAttributesAndPurchases from './migrations/002_custom_attributes_and_purchases.js';
+import * as financialCorePhase2 from './migrations/003_financial_core_phase2.js';
+import * as importRealMvpFormat from './migrations/004_import_real_mvp_format.js';
 
 export const MIGRATIONS = [
   { id: '001_initial_schema', module: initialSchema },
   { id: '002_custom_attributes_and_purchases', module: customAttributesAndPurchases },
+  { id: '003_financial_core_phase2', module: financialCorePhase2 },
+  { id: '004_import_real_mvp_format', module: importRealMvpFormat },
 ];
 
 /**
