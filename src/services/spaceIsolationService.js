@@ -10,9 +10,85 @@
  * - Ações críticas geram registros append-only na tabela audit_logs.
  */
 
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { AppError, ErrorCodes } from '../domain/envelope.js';
 import { Roles, requireAuthorization, Permissions } from '../domain/authorization.js';
+
+// =========================================================================
+// UTILITÁRIOS DE DATA (FASE 2 - ECO-62)
+// Todas as datas trafegam como string 'YYYY-MM-DD'. Meses são sempre
+// "clampados" ao último dia real do mês de destino (ex: 31/01 + 1 mês = 28
+// ou 29/02), evitando estouro de data em Fevereiro para parcelas, faturas
+// e recorrências mensais.
+// =========================================================================
+
+function lastDayOfMonth(year, month) {
+  // `month` é 1-indexado; Date.UTC(year, month, 0) devolve o último dia do mês anterior ao índice 0-based `month`.
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+function clampToMonth(year, month, day) {
+  const clampedDay = Math.min(day, lastDayOfMonth(year, month));
+  return `${year}-${String(month).padStart(2, '0')}-${String(clampedDay).padStart(2, '0')}`;
+}
+
+export function addMonthsClamped(dateStr, monthsToAdd) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const totalIndex = (m - 1) + monthsToAdd;
+  const year = y + Math.floor(totalIndex / 12);
+  const month = (((totalIndex % 12) + 12) % 12) + 1;
+  return clampToMonth(year, month, d);
+}
+
+export function addDays(dateStr, days) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + days);
+  return dt.toISOString().slice(0, 10);
+}
+
+/**
+ * Calcula o ciclo de fatura (início, fim, fechamento e vencimento) que contém
+ * `referenceDate`, a partir dos dias de fechamento/vencimento do cartão.
+ * Lida corretamente com meses de 28/29/30/31 dias (ex: fechamento dia 31 em
+ * meses menores cai no último dia do mês).
+ */
+export function computeInvoiceCycle(referenceDate, closingDay, dueDay) {
+  const [y, m, d] = referenceDate.split('-').map(Number);
+  let closingYear = y;
+  let closingMonth = m;
+  if (d > Math.min(closingDay, lastDayOfMonth(y, m))) {
+    closingMonth += 1;
+    if (closingMonth > 12) {
+      closingMonth = 1;
+      closingYear += 1;
+    }
+  }
+  const closingDate = clampToMonth(closingYear, closingMonth, closingDay);
+
+  let prevMonth = closingMonth - 1;
+  let prevYear = closingYear;
+  if (prevMonth < 1) {
+    prevMonth = 12;
+    prevYear -= 1;
+  }
+  const prevClosingDate = clampToMonth(prevYear, prevMonth, closingDay);
+  const cycleStart = addDays(prevClosingDate, 1);
+  const cycleEnd = closingDate;
+
+  let dueMonth = closingMonth;
+  let dueYear = closingYear;
+  if (dueDay <= closingDay) {
+    dueMonth += 1;
+    if (dueMonth > 12) {
+      dueMonth = 1;
+      dueYear += 1;
+    }
+  }
+  const dueDate = clampToMonth(dueYear, dueMonth, dueDay);
+
+  return { cycleStart, cycleEnd, closingDate, dueDate };
+}
 
 export class SpaceIsolationService {
   /**
@@ -315,15 +391,15 @@ export class SpaceIsolationService {
   /**
    * Cria conta bancária no espaço do contexto.
    */
-  createAccount(authContext, { id = randomUUID(), name, openingBalance = 0, accountType = 'checking' }) {
+  createAccount(authContext, { id = randomUUID(), name, openingBalance = 0, accountType = 'checking', currency = 'BRL' }) {
     requireAuthorization(authContext, Permissions.ACCOUNTS_WRITE);
 
     this.db
       .prepare(
-        `INSERT INTO accounts (id, space_id, name, opening_balance, current_balance, account_type)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO accounts (id, space_id, name, opening_balance, current_balance, account_type, currency)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(id, authContext.spaceId, name, openingBalance, openingBalance, accountType);
+      .run(id, authContext.spaceId, name, openingBalance, openingBalance, accountType, currency);
 
     this.logAudit({
       spaceId: authContext.spaceId,
@@ -331,7 +407,7 @@ export class SpaceIsolationService {
       action: 'account.create',
       entityType: 'accounts',
       entityId: id,
-      newData: { id, name, openingBalance, accountType },
+      newData: { id, name, openingBalance, accountType, currency },
     });
 
     return this.getAccount(authContext, id);
@@ -555,12 +631,1263 @@ export class SpaceIsolationService {
   getTransaction(authContext, transactionId) {
     requireAuthorization(authContext, Permissions.FINANCE_READ);
     const row = this.db
-      .prepare('SELECT * FROM transactions WHERE id = ? AND space_id = ?')
+      .prepare('SELECT * FROM transactions WHERE id = ? AND space_id = ? AND deleted_at IS NULL')
       .get(transactionId, authContext.spaceId);
     if (!row) {
       throw new AppError(ErrorCodes.NOT_FOUND, 'Transação não encontrada.', 404);
     }
     return row;
+  }
+
+  /**
+   * Atualiza campos permitidos de uma transação existente, revalidando
+   * qualquer nova referência entre espaços (ex: trocar categoria).
+   */
+  updateTransaction(authContext, transactionId, updates = {}) {
+    requireAuthorization(authContext, Permissions.TRANSACTIONS_WRITE);
+    const existing = this.getTransaction(authContext, transactionId);
+
+    if (updates.categoryId) {
+      const cat = this.db.prepare('SELECT space_id FROM categories WHERE id = ?').get(updates.categoryId);
+      if (!cat || cat.space_id !== authContext.spaceId) {
+        throw new AppError(ErrorCodes.CROSS_SPACE_REFERENCE_DENIED, 'Categoria pertence a outro espaço ou não existe.', 403);
+      }
+    }
+
+    const columnMap = {
+      description: 'description',
+      amount: 'amount',
+      categoryId: 'category_id',
+      observation: 'observation',
+      transactionDate: 'transaction_date',
+    };
+
+    const setClauses = [];
+    const values = [];
+    for (const [key, column] of Object.entries(columnMap)) {
+      if (updates[key] !== undefined) {
+        setClauses.push(`${column} = ?`);
+        values.push(updates[key]);
+      }
+    }
+
+    if (setClauses.length === 0) {
+      return existing;
+    }
+
+    setClauses.push("updated_at = datetime('now')");
+    values.push(transactionId, authContext.spaceId);
+
+    this.db
+      .prepare(`UPDATE transactions SET ${setClauses.join(', ')} WHERE id = ? AND space_id = ?`)
+      .run(...values);
+
+    this.logAudit({
+      spaceId: authContext.spaceId,
+      actorUserId: authContext.userId,
+      action: 'transaction.update',
+      entityType: 'transactions',
+      entityId: transactionId,
+      oldData: existing,
+      newData: updates,
+    });
+
+    return this.getTransaction(authContext, transactionId);
+  }
+
+  /**
+   * Exclusão lógica (soft delete) da transação, preservando histórico e auditoria.
+   */
+  deleteTransaction(authContext, transactionId) {
+    requireAuthorization(authContext, Permissions.TRANSACTIONS_WRITE);
+    const existing = this.getTransaction(authContext, transactionId);
+
+    this.db
+      .prepare("UPDATE transactions SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND space_id = ?")
+      .run(transactionId, authContext.spaceId);
+
+    this.logAudit({
+      spaceId: authContext.spaceId,
+      actorUserId: authContext.userId,
+      action: 'transaction.delete',
+      entityType: 'transactions',
+      entityId: transactionId,
+      oldData: existing,
+    });
+
+    return { deleted: true, id: transactionId };
+  }
+
+  /**
+   * Marca uma transação como paga/recebida (fluxo de caixa), preenchendo
+   * `effective_date`. Distinto de `transaction_date` (competência), evitando
+   * que caixa e competência sejam somados como o mesmo evento.
+   */
+  setTransactionPaid(authContext, { transactionId, paid = true, effectiveDate = null }) {
+    requireAuthorization(authContext, Permissions.TRANSACTIONS_WRITE);
+    const existing = this.getTransaction(authContext, transactionId);
+
+    const paidStatus = paid ? 'paid' : 'unpaid';
+    const effective = paid ? effectiveDate || existing.transaction_date : null;
+
+    this.db
+      .prepare(
+        "UPDATE transactions SET paid_status = ?, effective_date = ?, updated_at = datetime('now') WHERE id = ? AND space_id = ?",
+      )
+      .run(paidStatus, effective, transactionId, authContext.spaceId);
+
+    this.logAudit({
+      spaceId: authContext.spaceId,
+      actorUserId: authContext.userId,
+      action: 'transaction.set_paid',
+      entityType: 'transactions',
+      entityId: transactionId,
+      oldData: { paidStatus: existing.paid_status },
+      newData: { paidStatus, effective },
+    });
+
+    return this.getTransaction(authContext, transactionId);
+  }
+
+  /**
+   * Resumo por período separando caixa (transações pagas, por effective_date)
+   * de competência (todas as transações, por transaction_date), nunca somando
+   * os dois como o mesmo evento e excluindo transferências (não são receita/despesa).
+   */
+  getPeriodSummary(authContext, { year, month, basis = 'accrual' }) {
+    requireAuthorization(authContext, Permissions.REPORTS_READ);
+    const prefix = `${year}-${String(month).padStart(2, '0')}`;
+    const dateColumn = basis === 'cash' ? 'effective_date' : 'transaction_date';
+    const paidFilter = basis === 'cash' ? "AND paid_status = 'paid'" : '';
+
+    const rows = this.db
+      .prepare(
+        `SELECT type, SUM(amount) as total FROM transactions
+         WHERE space_id = ? AND deleted_at IS NULL AND type != 'transfer' ${paidFilter}
+         AND substr(${dateColumn}, 1, 7) = ?
+         GROUP BY type`,
+      )
+      .all(authContext.spaceId, prefix);
+
+    const summary = { basis, period: prefix, income: 0, expense: 0 };
+    for (const row of rows) {
+      if (row.type === 'income') summary.income += row.total;
+      else if (row.type === 'expense' || row.type === 'card_purchase') summary.expense += row.total;
+      else if (row.type === 'refund') summary.expense -= row.total;
+    }
+    return summary;
+  }
+
+  // =========================================================================
+  // TAGS (FASE 2 - ECO-62)
+  // =========================================================================
+
+  createTag(authContext, { id = randomUUID(), name, color = null }) {
+    requireAuthorization(authContext, Permissions.TRANSACTIONS_WRITE);
+    const existing = this.db
+      .prepare('SELECT * FROM tags WHERE space_id = ? AND name = ?')
+      .get(authContext.spaceId, name);
+    if (existing) return existing;
+
+    this.db.prepare('INSERT INTO tags (id, space_id, name, color) VALUES (?, ?, ?, ?)').run(
+      id,
+      authContext.spaceId,
+      name,
+      color,
+    );
+    return this.db.prepare('SELECT * FROM tags WHERE id = ?').get(id);
+  }
+
+  listTags(authContext) {
+    requireAuthorization(authContext, Permissions.FINANCE_READ);
+    return this.db.prepare('SELECT * FROM tags WHERE space_id = ? ORDER BY name ASC').all(authContext.spaceId);
+  }
+
+  /**
+   * Cria (se necessário) e vincula tags a uma ou mais transações do mesmo espaço.
+   */
+  addTransactionsTags(authContext, { transactionIds, tagNames }) {
+    requireAuthorization(authContext, Permissions.TRANSACTIONS_WRITE);
+    if (!Array.isArray(transactionIds) || transactionIds.length === 0) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, 'É necessário informar ao menos uma transação.', 400);
+    }
+    if (!Array.isArray(tagNames) || tagNames.length === 0) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, 'É necessário informar ao menos uma tag.', 400);
+    }
+
+    this.db.exec('BEGIN TRANSACTION;');
+    try {
+      const tagIds = tagNames.map((name) => this.createTag(authContext, { name }).id);
+      const insertLink = this.db.prepare(
+        'INSERT OR IGNORE INTO transaction_tags (space_id, transaction_id, tag_id) VALUES (?, ?, ?)',
+      );
+
+      for (const transactionId of transactionIds) {
+        const tx = this.db
+          .prepare('SELECT id FROM transactions WHERE id = ? AND space_id = ? AND deleted_at IS NULL')
+          .get(transactionId, authContext.spaceId);
+        if (!tx) {
+          throw new AppError(ErrorCodes.NOT_FOUND, `Transação '${transactionId}' não encontrada.`, 404);
+        }
+        for (const tagId of tagIds) {
+          insertLink.run(authContext.spaceId, transactionId, tagId);
+        }
+      }
+
+      this.db.exec('COMMIT;');
+    } catch (err) {
+      this.db.exec('ROLLBACK;');
+      throw err;
+    }
+
+    return transactionIds.map((transactionId) => ({
+      transactionId,
+      tags: this.listTransactionTags(authContext, transactionId),
+    }));
+  }
+
+  listTransactionTags(authContext, transactionId) {
+    requireAuthorization(authContext, Permissions.FINANCE_READ);
+    return this.db
+      .prepare(
+        `SELECT t.* FROM tags t
+         JOIN transaction_tags tt ON tt.tag_id = t.id
+         WHERE tt.transaction_id = ? AND tt.space_id = ?
+         ORDER BY t.name ASC`,
+      )
+      .all(transactionId, authContext.spaceId);
+  }
+
+  // =========================================================================
+  // TRANSFERÊNCIAS PAREADAS ENTRE CONTAS (FASE 2 - ECO-62)
+  // Nunca contabilizadas como receita/despesa consolidada (type = 'transfer').
+  // =========================================================================
+
+  createTransfer(
+    authContext,
+    { id = randomUUID(), sourceAccountId, destinationAccountId, amount, transferDate, description = 'Transferência entre contas' },
+  ) {
+    requireAuthorization(authContext, Permissions.TRANSACTIONS_WRITE);
+
+    if (!sourceAccountId || !destinationAccountId) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Conta de origem e de destino são obrigatórias.', 400);
+    }
+    if (sourceAccountId === destinationAccountId) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Conta de origem e de destino não podem ser a mesma.', 400);
+    }
+    if (!(amount > 0)) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Valor da transferência deve ser positivo.', 400);
+    }
+
+    const source = this.db
+      .prepare('SELECT * FROM accounts WHERE id = ? AND space_id = ?')
+      .get(sourceAccountId, authContext.spaceId);
+    if (!source) {
+      throw new AppError(ErrorCodes.CROSS_SPACE_REFERENCE_DENIED, 'Conta de origem pertence a outro espaço ou não existe.', 403);
+    }
+
+    const destination = this.db
+      .prepare('SELECT * FROM accounts WHERE id = ? AND space_id = ?')
+      .get(destinationAccountId, authContext.spaceId);
+    if (!destination) {
+      throw new AppError(ErrorCodes.CROSS_SPACE_REFERENCE_DENIED, 'Conta de destino pertence a outro espaço ou não existe.', 403);
+    }
+
+    if (source.currency !== destination.currency) {
+      throw new AppError(
+        ErrorCodes.CURRENCY_MISMATCH,
+        `Transferência entre moedas incompatíveis: origem '${source.currency}' e destino '${destination.currency}'.`,
+        400,
+      );
+    }
+
+    const sourceTransactionId = randomUUID();
+    const destinationTransactionId = randomUUID();
+
+    this.db.exec('BEGIN TRANSACTION;');
+    try {
+      this.createTransaction(authContext, {
+        id: sourceTransactionId,
+        type: 'transfer',
+        description,
+        amount,
+        accountId: sourceAccountId,
+        destinationAccountId,
+        transactionDate: transferDate,
+      });
+
+      this.createTransaction(authContext, {
+        id: destinationTransactionId,
+        type: 'transfer',
+        description,
+        amount,
+        accountId: destinationAccountId,
+        transactionDate: transferDate,
+      });
+
+      this.db
+        .prepare(
+          `INSERT INTO transfers (
+            id, space_id, source_account_id, destination_account_id,
+            source_transaction_id, destination_transaction_id, amount, currency, transfer_date, description
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          id,
+          authContext.spaceId,
+          sourceAccountId,
+          destinationAccountId,
+          sourceTransactionId,
+          destinationTransactionId,
+          amount,
+          source.currency,
+          transferDate,
+          description,
+        );
+
+      this.logAudit({
+        spaceId: authContext.spaceId,
+        actorUserId: authContext.userId,
+        action: 'transfer.create',
+        entityType: 'transfers',
+        entityId: id,
+        newData: { sourceAccountId, destinationAccountId, amount, transferDate },
+      });
+
+      this.db.exec('COMMIT;');
+      return this.getTransfer(authContext, id);
+    } catch (err) {
+      this.db.exec('ROLLBACK;');
+      throw err;
+    }
+  }
+
+  getTransfer(authContext, transferId) {
+    requireAuthorization(authContext, Permissions.FINANCE_READ);
+    const row = this.db
+      .prepare('SELECT * FROM transfers WHERE id = ? AND space_id = ?')
+      .get(transferId, authContext.spaceId);
+    if (!row) {
+      throw new AppError(ErrorCodes.NOT_FOUND, 'Transferência não encontrada.', 404);
+    }
+    return row;
+  }
+
+  // =========================================================================
+  // CICLO DE FATURA DE CARTÃO: COMPRAS, ESTORNOS, PAGAMENTOS E REABERTURA
+  // (FASE 2 - ECO-62)
+  // =========================================================================
+
+  /**
+   * Busca a fatura cujo ciclo contém `referenceDate`; cria automaticamente
+   * se ainda não existir (fatura sempre aberta ao nascer).
+   */
+  getOrCreateOpenInvoice(authContext, creditCardId, referenceDate) {
+    requireAuthorization(authContext, Permissions.FINANCE_READ);
+    const card = this.getCreditCard(authContext, creditCardId);
+    const { cycleStart, cycleEnd, closingDate, dueDate } = computeInvoiceCycle(
+      referenceDate,
+      card.closing_day,
+      card.due_day,
+    );
+
+    let invoice = this.db
+      .prepare('SELECT * FROM credit_card_invoices WHERE space_id = ? AND credit_card_id = ? AND cycle_start = ?')
+      .get(authContext.spaceId, creditCardId, cycleStart);
+
+    if (!invoice) {
+      const id = randomUUID();
+      this.db
+        .prepare(
+          `INSERT INTO credit_card_invoices (
+            id, space_id, credit_card_id, cycle_start, cycle_end, closing_date, due_date, status
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'open')`,
+        )
+        .run(id, authContext.spaceId, creditCardId, cycleStart, cycleEnd, closingDate, dueDate);
+      invoice = this.db.prepare('SELECT * FROM credit_card_invoices WHERE id = ?').get(id);
+    }
+
+    return invoice;
+  }
+
+  getCreditCardInvoice(authContext, invoiceId) {
+    requireAuthorization(authContext, Permissions.FINANCE_READ);
+    const row = this.db
+      .prepare('SELECT * FROM credit_card_invoices WHERE id = ? AND space_id = ?')
+      .get(invoiceId, authContext.spaceId);
+    if (!row) {
+      throw new AppError(ErrorCodes.NOT_FOUND, 'Fatura não encontrada.', 404);
+    }
+    return row;
+  }
+
+  /**
+   * Cria uma compra ou estorno no cartão, resolvendo/criando automaticamente
+   * a fatura do ciclo correspondente e atualizando seus totais. Uma cobrança
+   * tardia em fatura já fechada/paga a reabre automaticamente (status 'reopened').
+   */
+  createCardTransaction(
+    authContext,
+    { id = randomUUID(), type, creditCardId, amount, description, categoryId = null, transactionDate, observation = null },
+  ) {
+    requireAuthorization(authContext, Permissions.TRANSACTIONS_WRITE);
+    if (!['card_purchase', 'refund'].includes(type)) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, "Tipo deve ser 'card_purchase' ou 'refund'.", 400);
+    }
+
+    const invoice = this.getOrCreateOpenInvoice(authContext, creditCardId, transactionDate);
+
+    this.db.exec('BEGIN TRANSACTION;');
+    try {
+      this.createTransaction(authContext, {
+        id,
+        type,
+        description,
+        amount,
+        creditCardId,
+        categoryId,
+        transactionDate,
+        observation,
+      });
+
+      this.db
+        .prepare('UPDATE transactions SET credit_card_invoice_id = ? WHERE id = ? AND space_id = ?')
+        .run(invoice.id, id, authContext.spaceId);
+
+      if (type === 'card_purchase') {
+        this.db
+          .prepare(
+            `UPDATE credit_card_invoices
+             SET total_charges = total_charges + ?, open_amount = open_amount + ?, updated_at = datetime('now'),
+                 status = CASE WHEN status IN ('closed', 'paid') THEN 'reopened' ELSE status END
+             WHERE id = ?`,
+          )
+          .run(amount, amount, invoice.id);
+      } else {
+        this.db
+          .prepare(
+            `UPDATE credit_card_invoices
+             SET total_credits = total_credits + ?, open_amount = open_amount - ?, updated_at = datetime('now')
+             WHERE id = ?`,
+          )
+          .run(amount, amount, invoice.id);
+      }
+
+      this.logAudit({
+        spaceId: authContext.spaceId,
+        actorUserId: authContext.userId,
+        action: `card_transaction.${type}`,
+        entityType: 'transactions',
+        entityId: id,
+        newData: { creditCardId, amount, invoiceId: invoice.id },
+      });
+
+      this.db.exec('COMMIT;');
+      return this.getTransaction(authContext, id);
+    } catch (err) {
+      this.db.exec('ROLLBACK;');
+      throw err;
+    }
+  }
+
+  getInvoicePaymentSummary(authContext, invoiceId) {
+    const invoice = this.getCreditCardInvoice(authContext, invoiceId);
+    const payments = this.db
+      .prepare('SELECT * FROM invoice_payments WHERE credit_card_invoice_id = ? AND space_id = ? ORDER BY payment_date DESC')
+      .all(invoiceId, authContext.spaceId);
+    return {
+      invoice,
+      payments,
+      excessAmount: Math.max(0, -invoice.open_amount),
+    };
+  }
+
+  /**
+   * Registra pagamento (parcial, integral ou excedente) de uma fatura.
+   * Idempotente via `idempotencyKey`: reenviar a mesma chave NÃO cria um
+   * segundo pagamento, apenas devolve o resultado já processado.
+   */
+  registerInvoicePayment(authContext, { id = randomUUID(), invoiceId, amount, paymentDate, accountId = null, idempotencyKey = null }) {
+    requireAuthorization(authContext, Permissions.TRANSACTIONS_WRITE);
+
+    if (idempotencyKey) {
+      const existingPayment = this.db
+        .prepare('SELECT * FROM invoice_payments WHERE space_id = ? AND idempotency_key = ? AND reversed_at IS NULL')
+        .get(authContext.spaceId, idempotencyKey);
+      if (existingPayment) {
+        return { ...this.getInvoicePaymentSummary(authContext, existingPayment.credit_card_invoice_id), duplicate: true, paymentId: existingPayment.id };
+      }
+    }
+
+    const invoice = this.getCreditCardInvoice(authContext, invoiceId);
+    if (!(amount > 0)) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Valor do pagamento deve ser positivo.', 400);
+    }
+
+    if (accountId) {
+      const account = this.db.prepare('SELECT space_id FROM accounts WHERE id = ?').get(accountId);
+      if (!account || account.space_id !== authContext.spaceId) {
+        throw new AppError(ErrorCodes.CROSS_SPACE_REFERENCE_DENIED, 'Conta de pagamento pertence a outro espaço ou não existe.', 403);
+      }
+    }
+
+    const transactionId = randomUUID();
+
+    this.db.exec('BEGIN TRANSACTION;');
+    try {
+      this.createTransaction(authContext, {
+        id: transactionId,
+        type: 'card_payment',
+        description: 'Pagamento de fatura',
+        amount,
+        accountId,
+        transactionDate: paymentDate,
+      });
+
+      this.db
+        .prepare(
+          `INSERT INTO invoice_payments (id, space_id, credit_card_invoice_id, transaction_id, amount, payment_date, idempotency_key)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(id, authContext.spaceId, invoiceId, transactionId, amount, paymentDate, idempotencyKey);
+
+      const owed = invoice.total_charges - invoice.total_credits;
+      const newTotalPaid = invoice.total_paid + amount;
+      const newOpenAmount = owed - newTotalPaid; // negativo = crédito/excedente para a próxima fatura
+      const newStatus = newTotalPaid >= owed ? 'paid' : 'partially_paid';
+
+      this.db
+        .prepare(
+          `UPDATE credit_card_invoices SET total_paid = ?, open_amount = ?, status = ?, updated_at = datetime('now') WHERE id = ?`,
+        )
+        .run(newTotalPaid, newOpenAmount, newStatus, invoiceId);
+
+      this.logAudit({
+        spaceId: authContext.spaceId,
+        actorUserId: authContext.userId,
+        action: 'invoice_payment.register',
+        entityType: 'invoice_payments',
+        entityId: id,
+        newData: { invoiceId, amount, paymentDate },
+      });
+
+      this.db.exec('COMMIT;');
+      return { ...this.getInvoicePaymentSummary(authContext, invoiceId), duplicate: false, paymentId: id };
+    } catch (err) {
+      this.db.exec('ROLLBACK;');
+      throw err;
+    }
+  }
+
+  /**
+   * Desfaz um pagamento informado (uninform), reabrindo a fatura conforme
+   * necessário. A transação financeira do pagamento é excluída logicamente.
+   */
+  uninformInvoicePayment(authContext, { paymentId }) {
+    requireAuthorization(authContext, Permissions.TRANSACTIONS_WRITE);
+    const payment = this.db
+      .prepare('SELECT * FROM invoice_payments WHERE id = ? AND space_id = ? AND reversed_at IS NULL')
+      .get(paymentId, authContext.spaceId);
+    if (!payment) {
+      throw new AppError(ErrorCodes.NOT_FOUND, 'Pagamento não encontrado.', 404);
+    }
+
+    const invoice = this.getCreditCardInvoice(authContext, payment.credit_card_invoice_id);
+
+    this.db.exec('BEGIN TRANSACTION;');
+    try {
+      this.db.prepare("UPDATE invoice_payments SET reversed_at = datetime('now') WHERE id = ?").run(paymentId);
+
+      if (payment.transaction_id) {
+        this.db
+          .prepare("UPDATE transactions SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND space_id = ?")
+          .run(payment.transaction_id, authContext.spaceId);
+      }
+
+      const owed = invoice.total_charges - invoice.total_credits;
+      const newTotalPaid = Math.max(0, invoice.total_paid - payment.amount);
+      const newOpenAmount = owed - newTotalPaid;
+      let newStatus = invoice.status;
+      if (invoice.status === 'paid' || invoice.status === 'partially_paid') {
+        newStatus = newTotalPaid > 0 ? 'partially_paid' : 'reopened';
+      }
+
+      this.db
+        .prepare(
+          `UPDATE credit_card_invoices SET total_paid = ?, open_amount = ?, status = ?, updated_at = datetime('now') WHERE id = ?`,
+        )
+        .run(newTotalPaid, newOpenAmount, newStatus, invoice.id);
+
+      this.logAudit({
+        spaceId: authContext.spaceId,
+        actorUserId: authContext.userId,
+        action: 'invoice_payment.uninform',
+        entityType: 'invoice_payments',
+        entityId: paymentId,
+        oldData: { amount: payment.amount },
+      });
+
+      this.db.exec('COMMIT;');
+      return this.getInvoicePaymentSummary(authContext, invoice.id);
+    } catch (err) {
+      this.db.exec('ROLLBACK;');
+      throw err;
+    }
+  }
+
+  // =========================================================================
+  // PARCELAMENTOS (FASE 2 - ECO-62)
+  // Soma exata em centavos: o resto da divisão é distribuído 1 centavo por
+  // vez nas PRIMEIRAS parcelas, garantindo soma(parcelas) === total_amount.
+  // =========================================================================
+
+  createInstallmentPlan(
+    authContext,
+    { id = randomUUID(), description, totalAmount, installmentsCount, firstDueDate, accountId = null, creditCardId = null, categoryId = null },
+  ) {
+    requireAuthorization(authContext, Permissions.TRANSACTIONS_WRITE);
+
+    if (!Number.isInteger(installmentsCount) || installmentsCount < 2) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Parcelamento exige ao menos 2 parcelas.', 400);
+    }
+    if (!(totalAmount > 0)) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Valor total do parcelamento deve ser positivo.', 400);
+    }
+    if (!accountId && !creditCardId) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Informe a conta ou o cartão de crédito do parcelamento.', 400);
+    }
+
+    const base = Math.floor(totalAmount / installmentsCount);
+    const remainder = totalAmount - base * installmentsCount;
+
+    this.db.exec('BEGIN TRANSACTION;');
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO installment_plans (
+            id, space_id, description, total_amount, installments_count, account_id, credit_card_id, category_id, first_due_date
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(id, authContext.spaceId, description, totalAmount, installmentsCount, accountId, creditCardId, categoryId, firstDueDate);
+
+      let sumCheck = 0;
+      for (let i = 0; i < installmentsCount; i += 1) {
+        const installmentAmount = base + (i < remainder ? 1 : 0);
+        sumCheck += installmentAmount;
+        const dueDate = addMonthsClamped(firstDueDate, i);
+        const installmentTransactionId = randomUUID();
+        const installmentDescription = `${description} (${i + 1}/${installmentsCount})`;
+
+        if (creditCardId) {
+          this.createCardTransaction(authContext, {
+            id: installmentTransactionId,
+            type: 'card_purchase',
+            creditCardId,
+            amount: installmentAmount,
+            description: installmentDescription,
+            categoryId,
+            transactionDate: dueDate,
+          });
+        } else {
+          this.createTransaction(authContext, {
+            id: installmentTransactionId,
+            type: 'expense',
+            description: installmentDescription,
+            amount: installmentAmount,
+            accountId,
+            categoryId,
+            transactionDate: dueDate,
+          });
+        }
+
+        this.db
+          .prepare(
+            'UPDATE transactions SET installment_plan_id = ?, installment_number = ?, total_installments = ? WHERE id = ? AND space_id = ?',
+          )
+          .run(id, i + 1, installmentsCount, installmentTransactionId, authContext.spaceId);
+      }
+
+      if (sumCheck !== totalAmount) {
+        // Defesa em profundidade: nunca deve ocorrer dado o cálculo determinístico acima.
+        throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Soma das parcelas não bate com o valor total.', 500);
+      }
+
+      this.logAudit({
+        spaceId: authContext.spaceId,
+        actorUserId: authContext.userId,
+        action: 'installment_plan.create',
+        entityType: 'installment_plans',
+        entityId: id,
+        newData: { totalAmount, installmentsCount },
+      });
+
+      this.db.exec('COMMIT;');
+      return this.getInstallmentPlan(authContext, id);
+    } catch (err) {
+      this.db.exec('ROLLBACK;');
+      throw err;
+    }
+  }
+
+  getInstallmentPlan(authContext, planId) {
+    requireAuthorization(authContext, Permissions.FINANCE_READ);
+    const plan = this.db.prepare('SELECT * FROM installment_plans WHERE id = ? AND space_id = ?').get(planId, authContext.spaceId);
+    if (!plan) {
+      throw new AppError(ErrorCodes.NOT_FOUND, 'Plano de parcelamento não encontrado.', 404);
+    }
+    const installments = this.db
+      .prepare('SELECT * FROM transactions WHERE installment_plan_id = ? AND space_id = ? AND deleted_at IS NULL ORDER BY installment_number ASC')
+      .all(planId, authContext.spaceId);
+    return { ...plan, installments };
+  }
+
+  // =========================================================================
+  // RECORRÊNCIAS E PREVISÕES (FASE 2 - ECO-62)
+  // =========================================================================
+
+  createRecurrence(
+    authContext,
+    {
+      id = randomUUID(),
+      description,
+      type,
+      amount,
+      accountId = null,
+      creditCardId = null,
+      categoryId = null,
+      frequency = 'monthly',
+      dayOfMonth = null,
+      startDate,
+      endDate = null,
+    },
+  ) {
+    requireAuthorization(authContext, Permissions.TRANSACTIONS_WRITE);
+
+    if (!['income', 'expense'].includes(type)) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, "Tipo da recorrência deve ser 'income' ou 'expense'.", 400);
+    }
+    if (!(amount > 0)) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Valor da recorrência deve ser positivo.', 400);
+    }
+    if (!['monthly', 'weekly', 'yearly'].includes(frequency)) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Frequência inválida.', 400);
+    }
+
+    for (const [fieldId, table, label] of [
+      [accountId, 'accounts', 'Conta'],
+      [creditCardId, 'credit_cards', 'Cartão de crédito'],
+      [categoryId, 'categories', 'Categoria'],
+    ]) {
+      if (fieldId) {
+        const row = this.db.prepare(`SELECT space_id FROM ${table} WHERE id = ?`).get(fieldId);
+        if (!row || row.space_id !== authContext.spaceId) {
+          throw new AppError(ErrorCodes.CROSS_SPACE_REFERENCE_DENIED, `${label} pertence a outro espaço ou não existe.`, 403);
+        }
+      }
+    }
+
+    const resolvedDayOfMonth = dayOfMonth || Number(startDate.split('-')[2]);
+
+    this.db
+      .prepare(
+        `INSERT INTO recurrences (
+          id, space_id, description, type, amount, account_id, credit_card_id, category_id,
+          frequency, day_of_month, start_date, end_date
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        id,
+        authContext.spaceId,
+        description,
+        type,
+        amount,
+        accountId,
+        creditCardId,
+        categoryId,
+        frequency,
+        resolvedDayOfMonth,
+        startDate,
+        endDate,
+      );
+
+    this.logAudit({
+      spaceId: authContext.spaceId,
+      actorUserId: authContext.userId,
+      action: 'recurrence.create',
+      entityType: 'recurrences',
+      entityId: id,
+      newData: { description, type, amount, frequency, startDate },
+    });
+
+    return this.getRecurrence(authContext, id);
+  }
+
+  getRecurrence(authContext, recurrenceId) {
+    requireAuthorization(authContext, Permissions.FINANCE_READ);
+    const row = this.db
+      .prepare('SELECT * FROM recurrences WHERE id = ? AND space_id = ?')
+      .get(recurrenceId, authContext.spaceId);
+    if (!row) {
+      throw new AppError(ErrorCodes.NOT_FOUND, 'Recorrência não encontrada.', 404);
+    }
+    return row;
+  }
+
+  listRecurrences(authContext) {
+    requireAuthorization(authContext, Permissions.FINANCE_READ);
+    return this.db
+      .prepare("SELECT * FROM recurrences WHERE space_id = ? AND status != 'finished' ORDER BY start_date ASC")
+      .all(authContext.spaceId);
+  }
+
+  _computeRecurrenceOccurrenceDate(recurrence, index) {
+    if (recurrence.frequency === 'monthly') return addMonthsClamped(recurrence.start_date, index);
+    if (recurrence.frequency === 'yearly') return addMonthsClamped(recurrence.start_date, index * 12);
+    return addDays(recurrence.start_date, index * 7); // weekly
+  }
+
+  /**
+   * Gera (idempotentemente) as ocorrências de previsão de uma recorrência até
+   * `untilDate`, sem duplicar ocorrências já geradas para a mesma data.
+   */
+  generateForecastOccurrences(authContext, { recurrenceId, untilDate }) {
+    requireAuthorization(authContext, Permissions.TRANSACTIONS_WRITE);
+    const recurrence = this.getRecurrence(authContext, recurrenceId);
+
+    const existingDates = new Set(
+      this.db
+        .prepare('SELECT occurrence_date FROM recurrence_occurrences WHERE recurrence_id = ? AND space_id = ?')
+        .all(recurrenceId, authContext.spaceId)
+        .map((r) => r.occurrence_date),
+    );
+
+    const created = [];
+    const insertStmt = this.db.prepare(
+      `INSERT INTO recurrence_occurrences (id, space_id, recurrence_id, occurrence_date, status) VALUES (?, ?, ?, ?, 'forecast')`,
+    );
+
+    const MAX_OCCURRENCES = 600; // limite de segurança (ex: 50 anos em recorrência mensal)
+    for (let i = 0; i < MAX_OCCURRENCES; i += 1) {
+      const occurrenceDate = this._computeRecurrenceOccurrenceDate(recurrence, i);
+      if (occurrenceDate > untilDate) break;
+      if (recurrence.end_date && occurrenceDate > recurrence.end_date) break;
+
+      if (!existingDates.has(occurrenceDate)) {
+        const occId = randomUUID();
+        insertStmt.run(occId, authContext.spaceId, recurrenceId, occurrenceDate);
+        created.push({ id: occId, recurrenceId, occurrenceDate, status: 'forecast' });
+      }
+    }
+
+    return created;
+  }
+
+  listRecurrenceOccurrences(authContext, recurrenceId) {
+    requireAuthorization(authContext, Permissions.FINANCE_READ);
+    return this.db
+      .prepare('SELECT * FROM recurrence_occurrences WHERE recurrence_id = ? AND space_id = ? ORDER BY occurrence_date ASC')
+      .all(recurrenceId, authContext.spaceId);
+  }
+
+  /**
+   * Promove uma previsão (ocorrência de recorrência) a um lançamento real.
+   * Uma ocorrência já promovida não pode ser promovida novamente.
+   */
+  promoteForecastToTransaction(authContext, { occurrenceId }) {
+    requireAuthorization(authContext, Permissions.TRANSACTIONS_WRITE);
+    const occurrence = this.db
+      .prepare('SELECT * FROM recurrence_occurrences WHERE id = ? AND space_id = ?')
+      .get(occurrenceId, authContext.spaceId);
+    if (!occurrence) {
+      throw new AppError(ErrorCodes.NOT_FOUND, 'Previsão não encontrada.', 404);
+    }
+    if (occurrence.status === 'promoted') {
+      throw new AppError(ErrorCodes.OCCURRENCE_ALREADY_PROMOTED, 'Esta previsão já foi promovida a lançamento real.', 409);
+    }
+
+    const recurrence = this.getRecurrence(authContext, occurrence.recurrence_id);
+    const transactionId = randomUUID();
+
+    this.db.exec('BEGIN TRANSACTION;');
+    try {
+      this.createTransaction(authContext, {
+        id: transactionId,
+        type: recurrence.type,
+        description: recurrence.description,
+        amount: recurrence.amount,
+        accountId: recurrence.account_id,
+        creditCardId: recurrence.credit_card_id,
+        categoryId: recurrence.category_id,
+        transactionDate: occurrence.occurrence_date,
+      });
+
+      this.db
+        .prepare('UPDATE transactions SET recurrence_id = ? WHERE id = ? AND space_id = ?')
+        .run(recurrence.id, transactionId, authContext.spaceId);
+
+      this.db
+        .prepare("UPDATE recurrence_occurrences SET status = 'promoted', transaction_id = ? WHERE id = ?")
+        .run(transactionId, occurrenceId);
+
+      this.logAudit({
+        spaceId: authContext.spaceId,
+        actorUserId: authContext.userId,
+        action: 'recurrence_occurrence.promote',
+        entityType: 'recurrence_occurrences',
+        entityId: occurrenceId,
+        newData: { transactionId },
+      });
+
+      this.db.exec('COMMIT;');
+      return this.getTransaction(authContext, transactionId);
+    } catch (err) {
+      this.db.exec('ROLLBACK;');
+      throw err;
+    }
+  }
+
+  // =========================================================================
+  // EXCLUSÃO COM ARQUIVAMENTO PREFERENCIAL E IMPACTO (FASE 2 - ECO-62)
+  // Entidades com histórico associado NUNCA são apagadas fisicamente:
+  // são arquivadas e o impacto (registros afetados) é devolvido ao chamador.
+  // =========================================================================
+
+  deleteAccount(authContext, accountId) {
+    requireAuthorization(authContext, Permissions.ACCOUNTS_WRITE);
+    this.getAccount(authContext, accountId);
+
+    const impact = this.db
+      .prepare(
+        `SELECT COUNT(*) as count FROM transactions
+         WHERE space_id = ? AND deleted_at IS NULL AND (account_id = ? OR destination_account_id = ?)`,
+      )
+      .get(authContext.spaceId, accountId, accountId).count;
+
+    if (impact > 0) {
+      this.db
+        .prepare("UPDATE accounts SET archived_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND space_id = ?")
+        .run(accountId, authContext.spaceId);
+      this.logAudit({
+        spaceId: authContext.spaceId,
+        actorUserId: authContext.userId,
+        action: 'account.archive',
+        entityType: 'accounts',
+        entityId: accountId,
+        newData: { impactTransactions: impact },
+      });
+      return { archived: true, deleted: false, impact: { transactionsCount: impact } };
+    }
+
+    this.db.prepare('DELETE FROM accounts WHERE id = ? AND space_id = ?').run(accountId, authContext.spaceId);
+    this.logAudit({
+      spaceId: authContext.spaceId,
+      actorUserId: authContext.userId,
+      action: 'account.delete',
+      entityType: 'accounts',
+      entityId: accountId,
+    });
+    return { archived: false, deleted: true, impact: { transactionsCount: 0 } };
+  }
+
+  deleteCategory(authContext, categoryId) {
+    requireAuthorization(authContext, Permissions.CATEGORIES_WRITE);
+    this.getCategory(authContext, categoryId);
+
+    const txCount = this.db
+      .prepare('SELECT COUNT(*) as count FROM transactions WHERE space_id = ? AND category_id = ? AND deleted_at IS NULL')
+      .get(authContext.spaceId, categoryId).count;
+    const childCount = this.db
+      .prepare('SELECT COUNT(*) as count FROM categories WHERE space_id = ? AND parent_id = ?')
+      .get(authContext.spaceId, categoryId).count;
+    const itemCount = this.db
+      .prepare('SELECT COUNT(*) as count FROM purchase_items WHERE space_id = ? AND category_id = ?')
+      .get(authContext.spaceId, categoryId).count;
+    const impact = txCount + childCount + itemCount;
+
+    if (impact > 0) {
+      this.db
+        .prepare("UPDATE categories SET archived_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND space_id = ?")
+        .run(categoryId, authContext.spaceId);
+      this.logAudit({
+        spaceId: authContext.spaceId,
+        actorUserId: authContext.userId,
+        action: 'category.archive',
+        entityType: 'categories',
+        entityId: categoryId,
+        newData: { txCount, childCount, itemCount },
+      });
+      return {
+        archived: true,
+        deleted: false,
+        impact: { transactionsCount: txCount, childCategoriesCount: childCount, purchaseItemsCount: itemCount },
+      };
+    }
+
+    this.db.prepare('DELETE FROM categories WHERE id = ? AND space_id = ?').run(categoryId, authContext.spaceId);
+    this.logAudit({
+      spaceId: authContext.spaceId,
+      actorUserId: authContext.userId,
+      action: 'category.delete',
+      entityType: 'categories',
+      entityId: categoryId,
+    });
+    return { archived: false, deleted: true, impact: { transactionsCount: 0, childCategoriesCount: 0, purchaseItemsCount: 0 } };
+  }
+
+  deleteCreditCard(authContext, cardId) {
+    requireAuthorization(authContext, Permissions.CARDS_WRITE);
+    this.getCreditCard(authContext, cardId);
+
+    const txCount = this.db
+      .prepare('SELECT COUNT(*) as count FROM transactions WHERE space_id = ? AND credit_card_id = ? AND deleted_at IS NULL')
+      .get(authContext.spaceId, cardId).count;
+    const invoiceCount = this.db
+      .prepare('SELECT COUNT(*) as count FROM credit_card_invoices WHERE space_id = ? AND credit_card_id = ?')
+      .get(authContext.spaceId, cardId).count;
+    const impact = txCount + invoiceCount;
+
+    if (impact > 0) {
+      this.db
+        .prepare("UPDATE credit_cards SET archived_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND space_id = ?")
+        .run(cardId, authContext.spaceId);
+      this.logAudit({
+        spaceId: authContext.spaceId,
+        actorUserId: authContext.userId,
+        action: 'credit_card.archive',
+        entityType: 'credit_cards',
+        entityId: cardId,
+        newData: { txCount, invoiceCount },
+      });
+      return { archived: true, deleted: false, impact: { transactionsCount: txCount, invoicesCount: invoiceCount } };
+    }
+
+    this.db.prepare('DELETE FROM credit_cards WHERE id = ? AND space_id = ?').run(cardId, authContext.spaceId);
+    this.logAudit({
+      spaceId: authContext.spaceId,
+      actorUserId: authContext.userId,
+      action: 'credit_card.delete',
+      entityType: 'credit_cards',
+      entityId: cardId,
+    });
+    return { archived: false, deleted: true, impact: { transactionsCount: 0, invoicesCount: 0 } };
+  }
+
+  // =========================================================================
+  // IMPORTAÇÃO IDEMPOTENTE DO SLICE LOCAL (MVP EM localStorage) (FASE 2 - ECO-62)
+  //
+  // Contrato do payload aceito (definido nesta fase, ver decisões da Fase 2):
+  // {
+  //   source?: string,
+  //   accounts: [{ localId, name, accountType?, openingBalance? }],
+  //   categories: [{ localId, name, kind, parentLocalId? }],
+  //   transactions: [{ localId, type, description, amount, transactionDate,
+  //                     accountLocalId?, categoryLocalId?, observation?, tags? }]
+  // }
+  //
+  // Garantias: idempotente (checksum do payload bruto), validado (linhas
+  // inválidas são contadas em `skipped`, nunca inventadas), reversível
+  // (import_entities permite arquivar/soft-delete tudo que foi criado) e o
+  // export original é preservado integralmente em `raw_payload`.
+  // =========================================================================
+
+  importLocalStorageExport(authContext, { payload }) {
+    requireAuthorization(authContext, Permissions.TRANSACTIONS_WRITE);
+
+    if (!payload || typeof payload !== 'object') {
+      throw new AppError(ErrorCodes.IMPORT_INVALID_PAYLOAD, 'Payload de importação ausente ou inválido.', 400);
+    }
+    if (!Array.isArray(payload.accounts) || !Array.isArray(payload.categories) || !Array.isArray(payload.transactions)) {
+      throw new AppError(
+        ErrorCodes.IMPORT_INVALID_PAYLOAD,
+        'Payload deve conter as listas accounts, categories e transactions.',
+        400,
+      );
+    }
+
+    const raw = JSON.stringify(payload);
+    const checksum = createHash('sha256').update(raw).digest('hex');
+
+    const existingBatch = this.db
+      .prepare('SELECT * FROM import_batches WHERE space_id = ? AND checksum = ?')
+      .get(authContext.spaceId, checksum);
+    if (existingBatch) {
+      return {
+        batchId: existingBatch.id,
+        duplicate: true,
+        importedAccounts: existingBatch.imported_accounts,
+        importedCategories: existingBatch.imported_categories,
+        importedTransactions: existingBatch.imported_transactions,
+        skipped: existingBatch.skipped_count,
+      };
+    }
+
+    const batchId = randomUUID();
+    const localToRealAccount = new Map();
+    const localToRealCategory = new Map();
+    let importedAccounts = 0;
+    let importedCategories = 0;
+    let importedTransactions = 0;
+    let skipped = 0;
+
+    this.db.exec('BEGIN TRANSACTION;');
+    try {
+      // O lote é criado ANTES das entidades para satisfazer a FK de import_entities.batch_id;
+      // os contadores finais são atualizados ao término do processamento.
+      this.db
+        .prepare(
+          `INSERT INTO import_batches (
+            id, space_id, source, checksum, raw_payload, status,
+            imported_accounts, imported_categories, imported_transactions, skipped_count
+          ) VALUES (?, ?, ?, ?, ?, 'completed', 0, 0, 0, 0)`,
+        )
+        .run(batchId, authContext.spaceId, payload.source || 'localstorage_mvp', checksum, raw);
+
+      const trackEntity = this.db.prepare(
+        'INSERT INTO import_entities (id, space_id, batch_id, entity_type, entity_id) VALUES (?, ?, ?, ?, ?)',
+      );
+
+      for (const acc of payload.accounts) {
+        if (!acc || !acc.localId || !acc.name) {
+          skipped += 1;
+          continue;
+        }
+        const created = this.createAccount(authContext, {
+          name: acc.name,
+          openingBalance: acc.openingBalance || 0,
+          accountType: acc.accountType || 'checking',
+        });
+        localToRealAccount.set(acc.localId, created.id);
+        trackEntity.run(randomUUID(), authContext.spaceId, batchId, 'accounts', created.id);
+        importedAccounts += 1;
+      }
+
+      for (const cat of payload.categories) {
+        if (!cat || !cat.localId || !cat.name || !['expense', 'income'].includes(cat.kind)) {
+          skipped += 1;
+          continue;
+        }
+        const parentId = cat.parentLocalId ? localToRealCategory.get(cat.parentLocalId) || null : null;
+        const created = this.createCategory(authContext, { name: cat.name, kind: cat.kind, parentId });
+        localToRealCategory.set(cat.localId, created.id);
+        trackEntity.run(randomUUID(), authContext.spaceId, batchId, 'categories', created.id);
+        importedCategories += 1;
+      }
+
+      for (const tx of payload.transactions) {
+        if (!tx || !tx.localId || !tx.type || !tx.description || tx.amount === undefined || !tx.transactionDate) {
+          skipped += 1;
+          continue;
+        }
+        if (tx.accountLocalId && !localToRealAccount.has(tx.accountLocalId)) {
+          skipped += 1;
+          continue;
+        }
+        if (tx.categoryLocalId && !localToRealCategory.has(tx.categoryLocalId)) {
+          skipped += 1;
+          continue;
+        }
+
+        const created = this.createTransaction(authContext, {
+          type: tx.type,
+          description: tx.description,
+          amount: tx.amount,
+          accountId: tx.accountLocalId ? localToRealAccount.get(tx.accountLocalId) : null,
+          categoryId: tx.categoryLocalId ? localToRealCategory.get(tx.categoryLocalId) : null,
+          transactionDate: tx.transactionDate,
+          observation: tx.observation || null,
+          tags: tx.tags || [],
+        });
+        trackEntity.run(randomUUID(), authContext.spaceId, batchId, 'transactions', created.id);
+        importedTransactions += 1;
+      }
+
+      this.db
+        .prepare(
+          `UPDATE import_batches
+           SET imported_accounts = ?, imported_categories = ?, imported_transactions = ?, skipped_count = ?
+           WHERE id = ?`,
+        )
+        .run(importedAccounts, importedCategories, importedTransactions, skipped, batchId);
+
+      this.logAudit({
+        spaceId: authContext.spaceId,
+        actorUserId: authContext.userId,
+        action: 'import.create',
+        entityType: 'import_batches',
+        entityId: batchId,
+        newData: { importedAccounts, importedCategories, importedTransactions, skipped },
+      });
+
+      this.db.exec('COMMIT;');
+      return { batchId, duplicate: false, importedAccounts, importedCategories, importedTransactions, skipped };
+    } catch (err) {
+      this.db.exec('ROLLBACK;');
+      throw err;
+    }
+  }
+
+  getImportBatch(authContext, batchId) {
+    requireAuthorization(authContext, Permissions.FINANCE_READ);
+    const row = this.db
+      .prepare('SELECT * FROM import_batches WHERE id = ? AND space_id = ?')
+      .get(batchId, authContext.spaceId);
+    if (!row) {
+      throw new AppError(ErrorCodes.NOT_FOUND, 'Lote de importação não encontrado.', 404);
+    }
+    return row;
+  }
+
+  /**
+   * Reverte um lote de importação já concluído, arquivando/excluindo
+   * logicamente somente as entidades criadas por ele (rastreadas em
+   * import_entities), sem tocar em dados de outras origens.
+   */
+  reverseImportBatch(authContext, { batchId }) {
+    requireAuthorization(authContext, Permissions.TRANSACTIONS_WRITE);
+    const batch = this.getImportBatch(authContext, batchId);
+    if (batch.status === 'reversed') {
+      return { batchId, alreadyReversed: true, entitiesCount: 0 };
+    }
+
+    const entities = this.db
+      .prepare('SELECT * FROM import_entities WHERE batch_id = ? AND space_id = ?')
+      .all(batchId, authContext.spaceId);
+
+    this.db.exec('BEGIN TRANSACTION;');
+    try {
+      for (const entity of entities) {
+        if (entity.entity_type === 'transactions') {
+          this.db
+            .prepare("UPDATE transactions SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND space_id = ?")
+            .run(entity.entity_id, authContext.spaceId);
+        } else if (entity.entity_type === 'accounts') {
+          this.db
+            .prepare("UPDATE accounts SET archived_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND space_id = ?")
+            .run(entity.entity_id, authContext.spaceId);
+        } else if (entity.entity_type === 'categories') {
+          this.db
+            .prepare("UPDATE categories SET archived_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND space_id = ?")
+            .run(entity.entity_id, authContext.spaceId);
+        }
+      }
+
+      this.db.prepare("UPDATE import_batches SET status = 'reversed', reversed_at = datetime('now') WHERE id = ?").run(batchId);
+
+      this.logAudit({
+        spaceId: authContext.spaceId,
+        actorUserId: authContext.userId,
+        action: 'import.reverse',
+        entityType: 'import_batches',
+        entityId: batchId,
+        newData: { entitiesCount: entities.length },
+      });
+
+      this.db.exec('COMMIT;');
+      return { batchId, reversed: true, entitiesCount: entities.length };
+    } catch (err) {
+      this.db.exec('ROLLBACK;');
+      throw err;
+    }
   }
 
   // =========================================================================
