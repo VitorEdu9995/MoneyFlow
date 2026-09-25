@@ -1,6 +1,6 @@
 # Decisões de Arquitetura e Extensões do Domínio — Fase 1 (ECO-61)
 
-**Data:** 25/09/2026  
+**Data:** 25/09/2026
 **Status:** Fechado e Implementado
 
 Este documento registra as decisões técnicas e as observações do usuário consolidadas na **Fase 1 (Extensão)** do MoneyFlow, preservando a imutabilidade do catálogo inicial das 62 ferramentas MCP e garantindo o isolamento multi-espaço.
