@@ -1,0 +1,436 @@
+[
+  {
+    "name": "get_account_context",
+    "section": "2. Consultas e listagens",
+    "description": "Retorna contexto inicial em uma chamada: entidade conectada, plano, data local e listas compactas de contas, cartões e categorias.",
+    "rules": "Útil no início para evitar várias consultas list_*.",
+    "readOnly": false
+  },
+  {
+    "name": "list_accounts",
+    "section": "2. Consultas e listagens",
+    "description": "Lista contas bancárias do usuário com IDs.",
+    "rules": "Use para resolver conta antes de operações.",
+    "readOnly": false
+  },
+  {
+    "name": "list_credit_cards",
+    "section": "2. Consultas e listagens",
+    "description": "Lista cartões de crédito com IDs e limites.",
+    "rules": "Cartões automáticos/conectados têm restrições diferentes dos manuais.",
+    "readOnly": false
+  },
+  {
+    "name": "list_categories",
+    "section": "2. Consultas e listagens",
+    "description": "Lista categorias usadas para classificar transações.",
+    "rules": "Usar antes de criar/editar quando a categoria não for conhecida.",
+    "readOnly": false
+  },
+  {
+    "name": "list_transactions",
+    "section": "2. Consultas e listagens",
+    "description": "Lista transações por período, com paginação.",
+    "rules": "Máximo de 80 por página. O padrão cashflow não mostra compras individuais de cartão. Para análise por categoria, use list_mode='all_transactions' ou category_id. Use period_totals para o período completo; não some página truncada. Detalhes crus de Open Finance requerem get_transaction.",
+    "readOnly": false
+  },
+  {
+    "name": "list_transferences",
+    "section": "2. Consultas e listagens",
+    "description": "Lista transferências entre contas com paginação.",
+    "rules": "Datas em YYYY-MM-DD.",
+    "readOnly": false
+  },
+  {
+    "name": "list_budgets",
+    "section": "2. Consultas e listagens",
+    "description": "Lista limites/orçamentos por categoria.",
+    "rules": "Pode filtrar por ano e/ou mês.",
+    "readOnly": false
+  },
+  {
+    "name": "list_recurrences",
+    "section": "2. Consultas e listagens",
+    "description": "Lista contas fixas recorrentes cadastradas, com periodicidade, valor e próxima ocorrência.",
+    "rules": "Traz recorrências manuais; em conexões Open Finance pode retornar vazio. Não inclui parcelamentos; para eles use find_installments.",
+    "readOnly": false
+  },
+  {
+    "name": "list_institutions",
+    "section": "2. Consultas e listagens",
+    "description": "Lista instituições financeiras e IDs/slug usados em contas ou cartões.",
+    "rules": "Aceita filtro por nome (query).",
+    "readOnly": false
+  },
+  {
+    "name": "get_credit_card_invoices",
+    "section": "2. Consultas e listagens",
+    "description": "Lista faturas de um cartão.",
+    "rules": "Requer credit_card_id.",
+    "readOnly": false
+  },
+  {
+    "name": "get_credit_card_invoice",
+    "section": "2. Consultas e listagens",
+    "description": "Retorna detalhes de uma fatura específica, incluindo transações, pagamentos e gastos por categoria.",
+    "rules": "Prefira o nome do cartão quando disponível para resolução.",
+    "readOnly": false
+  },
+  {
+    "name": "get_invoices_matrix",
+    "section": "2. Consultas e listagens",
+    "description": "Monta matriz mês × cartão com totais por mês, cartão e geral.",
+    "rules": "Indicado para vários cartões/meses; padrão é ano atual e todos os cartões. Usa os valores da ferramenta de faturas, evitando soma manual.",
+    "readOnly": false
+  },
+  {
+    "name": "get_transaction",
+    "section": "2. Consultas e listagens",
+    "description": "Obtém detalhes completos de uma transação por ID ou UUID.",
+    "rules": "Use para inspecionar detalhes Open Finance omitidos da listagem.",
+    "readOnly": false
+  },
+  {
+    "name": "search_transactions",
+    "section": "2. Consultas e listagens",
+    "description": "Pesquisa transações por texto na descrição, observação ou tags.",
+    "rules": "Paginação. Sem datas, o padrão são os últimos 6 meses.",
+    "readOnly": false
+  },
+  {
+    "name": "get_latest_imports",
+    "section": "2. Consultas e listagens",
+    "description": "Lista transações importadas mais recentemente via Open Finance.",
+    "rules": "Paginação; padrão 50, máximo 100 por página.",
+    "readOnly": false
+  },
+  {
+    "name": "get_bank_connections",
+    "section": "2. Consultas e listagens",
+    "description": "Lista conexões bancárias Open Finance ativas e o estado de cada uma.",
+    "rules": "Somente leitura; não força sincronização.",
+    "readOnly": false
+  },
+  {
+    "name": "get_open_finance_status",
+    "section": "2. Consultas e listagens",
+    "description": "Consulta ao vivo o estado do agregador Open Finance (Belvo), opcionalmente por banco.",
+    "rules": "Resultado cacheado por cerca de 5 minutos. Útil para diagnosticar instabilidade do provedor.",
+    "readOnly": false
+  },
+  {
+    "name": "resolve_entity",
+    "section": "2. Consultas e listagens",
+    "description": "Resolve um nome aproximado para ID/UUID de conta, cartão ou categoria.",
+    "rules": "Se houver ambiguidade, retorna correspondências candidatas. Usar antes de escrever em caso de nomes incertos.",
+    "readOnly": false
+  },
+  {
+    "name": "get_financial_summary",
+    "section": "3. Relatórios, métricas e análises",
+    "description": "Resume receitas, despesas, comparação entre períodos e maiores gastos.",
+    "rules": "Totais usam base caixa; maiores gastos usam base por lançamento e incluem cartão. Esses valores não devem ser somados entre si.",
+    "readOnly": false
+  },
+  {
+    "name": "transactions_list_results",
+    "section": "3. Relatórios, métricas e análises",
+    "description": "Retorna totais do período: receitas, despesas, resultado, saldo e previstos, sem paginar linha a linha.",
+    "rules": "Ideal para perguntas como “quanto gastei?” ou “qual meu saldo?”. Padrão mês atual; caixa por padrão, mas category_id muda para base por lançamento. Não misture bases.",
+    "readOnly": false
+  },
+  {
+    "name": "get_income_vs_expenses",
+    "section": "3. Relatórios, métricas e análises",
+    "description": "Relatório de receitas contra despesas por período.",
+    "rules": "Modo caixa; padrão mês atual. Pode filtrar conta. Exclui compras individuais de cartão e considera pagamento de fatura.",
+    "readOnly": false
+  },
+  {
+    "name": "get_monthly_overview",
+    "section": "3. Relatórios, métricas e análises",
+    "description": "Visão mensal com receitas, despesas, saldo, maiores categorias, status de orçamento e contas a pagar próximas.",
+    "rules": "Padrão mês atual. Totais são base caixa; categorias superiores são base por lançamento e não somam com totals.expenses.",
+    "readOnly": false
+  },
+  {
+    "name": "get_categories_report",
+    "section": "3. Relatórios, métricas e análises",
+    "description": "Agrupa receitas e despesas por categoria, com percentuais e subcategorias.",
+    "rules": "Inclui compras de cartão; base por lançamento. Padrão mês atual.",
+    "readOnly": false
+  },
+  {
+    "name": "get_categories_evolution",
+    "section": "3. Relatórios, métricas e análises",
+    "description": "Mostra evolução de receitas/despesas por categoria ao longo do tempo.",
+    "rules": "Pode agrupar por dia, semana ou mês; padrão últimos 3 meses.",
+    "readOnly": false
+  },
+  {
+    "name": "get_tags_report",
+    "section": "3. Relatórios, métricas e análises",
+    "description": "Agrupa transações por tag, com valores e percentuais.",
+    "rules": "Padrão mês atual; informar datas amplas para históricos longos/projetos.",
+    "readOnly": false
+  },
+  {
+    "name": "get_budget_summary",
+    "section": "3. Relatórios, métricas e análises",
+    "description": "Resume os orçamentos do mês e identifica limites excedidos ou próximos.",
+    "rules": "Padrão mês atual.",
+    "readOnly": false
+  },
+  {
+    "name": "get_upcoming_bills",
+    "section": "3. Relatórios, métricas e análises",
+    "description": "Lista contas não pagas e faturas de cartão com vencimento nos próximos dias.",
+    "rules": "Padrão 7 dias.",
+    "readOnly": false
+  },
+  {
+    "name": "get_balances",
+    "section": "3. Relatórios, métricas e análises",
+    "description": "Lista saldo por conta, faturas atuais abertas por cartão e patrimônio simplificado (contas menos faturas abertas).",
+    "rules": "Base caixa; não trata parcelas ou faturas futuras como dívida.",
+    "readOnly": false
+  },
+  {
+    "name": "get_cashflow_forecast",
+    "section": "3. Relatórios, métricas e análises",
+    "description": "Projeta fluxo de caixa com saldo atual e transações futuras não pagas em contas manuais.",
+    "rules": "Padrão próximos 30 dias; retorna saldo projetado e menor ponto. Não projeta faturas de cartão.",
+    "readOnly": false
+  },
+  {
+    "name": "find_duplicates",
+    "section": "3. Relatórios, métricas e análises",
+    "description": "Encontra transações possivelmente duplicadas com valores iguais e descrições parecidas em datas próximas.",
+    "rules": "Padrão mês atual. Útil antes de correções/exclusões, não prova por si só que são duplicatas.",
+    "readOnly": false
+  },
+  {
+    "name": "find_installments",
+    "section": "3. Relatórios, métricas e análises",
+    "description": "Identifica compras parceladas por dados estruturados e heurística.",
+    "rules": "Use em vez de pesquisa textual para parcelamentos. Sem datas, últimos 12 meses; pode filtrar conta/cartão. Resultados heurísticos são apresentados como possíveis parcelamentos.",
+    "readOnly": false
+  },
+  {
+    "name": "find_subscriptions",
+    "section": "3. Relatórios, métricas e análises",
+    "description": "Detecta assinaturas e serviços recorrentes em conexões Open Finance.",
+    "rules": "Combina recorrências cadastradas e heurística de repetição de estabelecimento; classifica estabilidade do valor. Não inclui parcelamentos. Sem datas, últimos 6 meses.",
+    "readOnly": false
+  },
+  {
+    "name": "suggest_categories",
+    "section": "3. Relatórios, métricas e análises",
+    "description": "Sugere categoria para uma ou mais descrições.",
+    "rules": "Considera edições anteriores do usuário, histórico categorizado e padrões gerais. Retorna confiança e força semântica. Usar antes de criar lotes categorizados e revisar confiança.",
+    "readOnly": false
+  },
+  {
+    "name": "load_skill",
+    "section": "3. Relatórios, métricas e análises",
+    "description": "Carrega guia detalhado de uso de um tema da Organizze.",
+    "rules": "A descrição recomenda chamar antes de responder quando a conversa envolver tema coberto por guia específico.",
+    "readOnly": false
+  },
+  {
+    "name": "create_transaction",
+    "section": "4. Criação e manutenção de transações e transferências",
+    "description": "Cria receita ou despesa.",
+    "rules": "is_income é obrigatório; valor é positivo e o booleano define receita/despesa. Requer descrição, valor, data e conta/cartão. Aceita conta/categoria pelo nome, tags, observação, recorrência e quantidade de parcelas. Não há parâmetro para anexar arquivo no esquema do MCP consultado.",
+    "readOnly": false
+  },
+  {
+    "name": "update_transaction",
+    "section": "4. Criação e manutenção de transações e transferências",
+    "description": "Atualiza campos de transação existente.",
+    "rules": "Passe somente campos a alterar. ID/UUID deve vir de listagem/pesquisa/detalhe recente. Em transações automáticas só descrição, categoria, observação e tags podem mudar. Para mudar fatura de compra manual use credit_card_invoice_id ou recompute_invoice=true; mudar somente data mantém fatura atual.",
+    "readOnly": false
+  },
+  {
+    "name": "delete_transaction",
+    "section": "4. Criação e manutenção de transações e transferências",
+    "description": "Exclui uma transação.",
+    "rules": "Transações automáticas não podem ser excluídas. ID/UUID deve vir de consulta recente. Em recorrências, use delete_recurrence para remover a regra (esta ferramenta não aparece na lista disponível) ou confirme o escopo da operação; exclusões em lote têm ferramenta própria.",
+    "readOnly": false
+  },
+  {
+    "name": "set_transaction_paid",
+    "section": "4. Criação e manutenção de transações e transferências",
+    "description": "Marca transação como paga/recebida ou não paga.",
+    "rules": "Para contas manuais. Idempotente. Transações automáticas são sempre consideradas pagas.",
+    "readOnly": false
+  },
+  {
+    "name": "create_transfer",
+    "section": "4. Criação e manutenção de transações e transferências",
+    "description": "Cria transferência entre duas contas bancárias.",
+    "rules": "Pode aceitar recorrência; não envolve cartão de crédito. Prefira nomes de contas resolvidos pela listagem/contexto.",
+    "readOnly": false
+  },
+  {
+    "name": "inform_invoice_payment",
+    "section": "4. Criação e manutenção de transações e transferências",
+    "description": "Informa pagamento de fatura de cartão automático/Open Finance.",
+    "rules": "Representa sinalização enquanto aguarda confirmação da fonte bancária.",
+    "readOnly": false
+  },
+  {
+    "name": "register_invoice_payment",
+    "section": "4. Criação e manutenção de transações e transferências",
+    "description": "Registra pagamento de fatura de cartão manual como lançamento vinculado à fatura.",
+    "rules": "Para cartões manuais. Obtenha faturas primeiro via get_credit_card_invoices; passe ID ou mês YYYY-MM. Prefira nomes de cartão/conta.",
+    "readOnly": false
+  },
+  {
+    "name": "uninform_invoice_payment",
+    "section": "4. Criação e manutenção de transações e transferências",
+    "description": "Desfaz sinalização de pagamento de fatura automática ainda aguardando confirmação.",
+    "rules": "Exige data/ID da fatura. Não remove pagamentos reais já confirmados pelo Open Finance.",
+    "readOnly": false
+  },
+  {
+    "name": "mass_create_transactions",
+    "section": "5. Operações em lote",
+    "description": "Cria várias transações em uma chamada.",
+    "rules": "Máximo 100. Cada linha deve ser única por descrição+valor+data+conta; deduplicar antes de enviar. Não usar para importar CSV/OFX com snapshot canônico; a orientação é usar a importação do app ou linhas sem fingerprint de anexo. A chamada MCP executa sem confirmação interativa.",
+    "readOnly": false
+  },
+  {
+    "name": "mass_update_transactions",
+    "section": "5. Operações em lote",
+    "description": "Atualiza várias transações por filtro de busca.",
+    "rules": "Máximo 200. Antes, valide os mesmos filtros com listagem/pesquisa. Informe ao menos um filtro e um campo alterável. Conjunto vazio ou maior que o limite exige refinamento. Alterações em lote podem ser irreversíveis.",
+    "readOnly": false
+  },
+  {
+    "name": "mass_delete_transactions",
+    "section": "5. Operações em lote",
+    "description": "Exclui várias transações por IDs/UUIDs.",
+    "rules": "Máximo 500. IDs devem vir de uma busca recente; nunca invente. Transações automáticas são ignoradas; recorrentes afetam apenas a ocorrência atual. Operação destrutiva.",
+    "readOnly": false
+  },
+  {
+    "name": "add_transactions_tags",
+    "section": "5. Operações em lote",
+    "description": "Adiciona tags a várias transações.",
+    "rules": "Máximo 200; acumula às tags existentes. Cada item informa ID/UUID e tags, como texto separado por vírgulas ou lista.",
+    "readOnly": false
+  },
+  {
+    "name": "update_transactions_categories",
+    "section": "5. Operações em lote",
+    "description": "Define categoria de várias transações, podendo escolher destino por linha.",
+    "rules": "Máximo 200. Útil quando cada transação tem categoria diferente, por exemplo após suggest_categories. Prefira nome de categoria e IDs obtidos no turno atual. Se todas receberão a mesma categoria, prefira mass_update_transactions.",
+    "readOnly": false
+  },
+  {
+    "name": "update_transactions_descriptions",
+    "section": "5. Operações em lote",
+    "description": "Substitui descrições de várias transações.",
+    "rules": "Máximo 200. Aceita ID/UUID e descrição por linha; também aceita um único objeto. Para uma regra comum a todas, prefira mass_update_transactions.",
+    "readOnly": false
+  },
+  {
+    "name": "mass_manage_categories",
+    "section": "5. Operações em lote",
+    "description": "Aplica mudanças em lote na árvore de categorias.",
+    "rules": "Máximo 100 operações; mudanças atômicas: se uma falhar, nenhuma é aplicada. Operações: criar, renomear, mover (pai 0 para raiz), arquivar e desarquivar. Não exclui categorias. Resolve por nome.",
+    "readOnly": false
+  },
+  {
+    "name": "create_account",
+    "section": "6. Contas, cartões, categorias e orçamentos",
+    "description": "Cria conta bancária manual.",
+    "rules": "Usar nomes/IDs válidos de instituição conforme list_institutions quando aplicável.",
+    "readOnly": false
+  },
+  {
+    "name": "update_account",
+    "section": "6. Contas, cartões, categorias e orçamentos",
+    "description": "Atualiza nome, descrição, instituição ou arquivamento da conta.",
+    "rules": "Contas automáticas permitem apenas nome e arquivamento. Prefira nome, sem inventar ID.",
+    "readOnly": false
+  },
+  {
+    "name": "delete_account",
+    "section": "6. Contas, cartões, categorias e orçamentos",
+    "description": "Exclui uma conta.",
+    "rules": "**Atenção:** todas as transações daquela conta são apagadas em background. Contas automáticas não podem ser excluídas por essa ferramenta; desconexão deve ser feita no fluxo próprio do app.",
+    "readOnly": false
+  },
+  {
+    "name": "create_credit_card",
+    "section": "6. Contas, cartões, categorias e orçamentos",
+    "description": "Cria cartão manual.",
+    "rules": "Cartões automáticos vêm da conexão bancária. Faturas são geradas automaticamente após criação.",
+    "readOnly": false
+  },
+  {
+    "name": "update_credit_card",
+    "section": "6. Contas, cartões, categorias e orçamentos",
+    "description": "Atualiza nome, bandeira, dias de fechamento/vencimento, limite ou arquivamento.",
+    "rules": "Cartões automáticos permitem somente nome e arquivamento. Prefira nome em vez de ID inventado.",
+    "readOnly": false
+  },
+  {
+    "name": "delete_credit_card",
+    "section": "6. Contas, cartões, categorias e orçamentos",
+    "description": "Exclui cartão.",
+    "rules": "**Atenção:** todas as transações e faturas do cartão são excluídas. Cartões automáticos não podem ser excluídos por esta ferramenta.",
+    "readOnly": false
+  },
+  {
+    "name": "create_category",
+    "section": "6. Contas, cartões, categorias e orçamentos",
+    "description": "Cria categoria de despesa ou receita, raiz ou subcategoria.",
+    "rules": "Categoria filha depende da categoria pai apropriada.",
+    "readOnly": false
+  },
+  {
+    "name": "update_category",
+    "section": "6. Contas, cartões, categorias e orçamentos",
+    "description": "Atualiza nome, cor, categoria pai ou arquivamento.",
+    "rules": "Categorias padrão não podem ser excluídas, mas podem ser renomeadas/arquivadas. Prefira nome.",
+    "readOnly": false
+  },
+  {
+    "name": "delete_category",
+    "section": "6. Contas, cartões, categorias e orçamentos",
+    "description": "Exclui categoria e redireciona transações para categoria substituta ou padrão.",
+    "rules": "Categorias padrão não podem ser excluídas. Excluir categoria raiz também remove subcategorias. Confirmar destino e impacto antes de usar.",
+    "readOnly": false
+  },
+  {
+    "name": "create_budget",
+    "section": "6. Contas, cartões, categorias e orçamentos",
+    "description": "Cria limite de gastos para uma categoria.",
+    "rules": "Padrão é orçamento de despesa; use activity_type='earning' para meta de receita. Prefira nome da categoria.",
+    "readOnly": false
+  },
+  {
+    "name": "update_budget",
+    "section": "6. Contas, cartões, categorias e orçamentos",
+    "description": "Atualiza valor de orçamento.",
+    "rules": "amount=0 remove o orçamento.",
+    "readOnly": false
+  },
+  {
+    "name": "delete_budget",
+    "section": "6. Contas, cartões, categorias e orçamentos",
+    "description": "Remove um orçamento.",
+    "rules": "Afeta limite da categoria/período informado.",
+    "readOnly": false
+  },
+  {
+    "name": "clone_budgets",
+    "section": "6. Contas, cartões, categorias e orçamentos",
+    "description": "Copia orçamentos do mês anterior para o mês de destino.",
+    "rules": "Não sobrescreve mês que já tenha orçamentos. Padrão é mês atual.",
+    "readOnly": false
+  }
+]

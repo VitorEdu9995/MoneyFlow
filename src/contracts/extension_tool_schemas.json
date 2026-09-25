@@ -1,0 +1,189 @@
+{
+  "create_attribute_definition": {
+    "name": "create_attribute_definition",
+    "description": "Cria definição de atributo personalizado por espaço ou categoria.",
+    "rules": "Tipos válidos: text, number, currency, date, boolean, select, barcode. Mudança futura de tipo gerará nova versão.",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "target_type": { "type": "string", "enum": ["transaction", "recurrence", "item"] },
+        "category_id": { "type": "string" },
+        "name": { "type": "string" },
+        "slug": { "type": "string" },
+        "data_type": { "type": "string", "enum": ["text", "number", "currency", "date", "boolean", "select", "barcode"] },
+        "is_multiple": { "type": "boolean" },
+        "is_required": { "type": "boolean" },
+        "allowed_options": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["target_type", "name", "slug", "data_type"]
+    }
+  },
+  "update_attribute_definition": {
+    "name": "update_attribute_definition",
+    "description": "Atualiza atributo personalizado. Renomear preserva histórico; alterar data_type cria nova versão.",
+    "rules": "Atributos arquivados não podem ser alterados.",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "data_type": { "type": "string", "enum": ["text", "number", "currency", "date", "boolean", "select", "barcode"] },
+        "allowed_options": { "type": "array", "items": { "type": "string" } },
+        "is_required": { "type": "boolean" }
+      },
+      "required": ["id"]
+    }
+  },
+  "archive_attribute_definition": {
+    "name": "archive_attribute_definition",
+    "description": "Arquiva uma definição de atributo, impedindo novos lançamentos com ele mas preservando o histórico.",
+    "rules": "Operação não destrutiva.",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" }
+      },
+      "required": ["id"]
+    }
+  },
+  "set_attribute_values": {
+    "name": "set_attribute_values",
+    "description": "Define valores tipados de atributos personalizados em lançamentos, recorrências ou itens.",
+    "rules": "Falha se o atributo estiver arquivado ou se pertencer a outro espaço.",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "entity_type": { "type": "string", "enum": ["transaction", "recurrence", "item", "recurrence_instance"] },
+        "entity_id": { "type": "string" },
+        "values": { "type": "array", "items": { "type": "object" } }
+      },
+      "required": ["entity_type", "entity_id", "values"]
+    }
+  },
+  "create_purchase_location": {
+    "name": "create_purchase_location",
+    "description": "Cadastra local de compra com rede/marca e filial opcional.",
+    "rules": "Permite associar compras e histórico de preços a estabelecimentos específicos.",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "brand_name": { "type": "string" },
+        "branch_name": { "type": "string" },
+        "address": { "type": "string" },
+        "city": { "type": "string" }
+      },
+      "required": ["brand_name"]
+    }
+  },
+  "list_purchase_locations": {
+    "name": "list_purchase_locations",
+    "description": "Lista locais de compras cadastrados no espaço.",
+    "rules": "Somente leitura.",
+    "readOnly": true,
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  "create_product": {
+    "name": "create_product",
+    "description": "Cadastra produto no catálogo identificado por código de barras ou nome normalizado + marca + unidade.",
+    "rules": "Conflito de código de barras no mesmo espaço gera erro BARCODE_CONFLICT.",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "barcode": { "type": "string" },
+        "brand": { "type": "string" },
+        "default_unit": { "type": "string", "enum": ["un", "kg", "g", "l", "ml", "m", "cx", "pacote"] },
+        "default_category_id": { "type": "string" }
+      },
+      "required": ["name"]
+    }
+  },
+  "merge_products": {
+    "name": "merge_products",
+    "description": "Funde dois produtos do catálogo, migrando itens e histórico de preços. Exclusivo de admin/owner.",
+    "rules": "Códigos de barras diferentes e conflitantes bloqueiam a fusão.",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "source_product_id": { "type": "string" },
+        "target_product_id": { "type": "string" }
+      },
+      "required": ["source_product_id", "target_product_id"]
+    }
+  },
+  "create_purchase_with_items": {
+    "name": "create_purchase_with_items",
+    "description": "Criação atômica de compra-pai com itens-filhos, vinculação de local, categorias por item e histórico de preço.",
+    "rules": "Fluxo de caixa debita a compra uma única vez. Categorias utilizam itens individuais. A soma dos itens e ajustes deve ser exata.",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "description": { "type": "string" },
+        "transaction_date": { "type": "string" },
+        "account_id": { "type": "string" },
+        "location_id": { "type": "string" },
+        "discount_amount": { "type": "integer" },
+        "addition_amount": { "type": "integer" },
+        "items": { "type": "array", "items": { "type": "object" } }
+      },
+      "required": ["description", "transaction_date", "items"]
+    }
+  },
+  "get_purchase": {
+    "name": "get_purchase",
+    "description": "Obtém detalhes completos de uma compra e todos os seus itens-filhos.",
+    "rules": "Somente leitura.",
+    "readOnly": true,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "purchase_id": { "type": "string" }
+      },
+      "required": ["purchase_id"]
+    }
+  },
+  "create_item_refund": {
+    "name": "create_item_refund",
+    "description": "Registra devolução/estorno de item vinculado de uma compra, preservando original e atualizando saldo líquido.",
+    "rules": "Não pode devolver quantidade ou valor superior ao comprado no item.",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "purchase_item_id": { "type": "string" },
+        "refund_quantity": { "type": "number" },
+        "refund_amount": { "type": "integer" },
+        "reason": { "type": "string" },
+        "refund_date": { "type": "string" },
+        "create_refund_transaction": { "type": "boolean" },
+        "account_id": { "type": "string" }
+      },
+      "required": ["purchase_item_id", "refund_quantity", "refund_amount", "refund_date"]
+    }
+  },
+  "get_price_history": {
+    "name": "get_price_history",
+    "description": "Consulta histórico de preços efetivamente pagos por produto, local e período.",
+    "rules": "Somente leitura.",
+    "readOnly": true,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "product_id": { "type": "string" },
+        "location_id": { "type": "string" }
+      },
+      "required": ["product_id"]
+    }
+  }
+}

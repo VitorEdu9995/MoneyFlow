@@ -1,0 +1,817 @@
+{
+  "get_account_context": {
+    "name": "get_account_context",
+    "validCall": {
+      "arguments": {}
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "list_accounts": {
+    "name": "list_accounts",
+    "validCall": {
+      "arguments": {
+        "include_archived": true
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "list_credit_cards": {
+    "name": "list_credit_cards",
+    "validCall": {
+      "arguments": {
+        "include_archived": true
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "list_categories": {
+    "name": "list_categories",
+    "validCall": {
+      "arguments": {
+        "kind": "expense"
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "list_transactions": {
+    "name": "list_transactions",
+    "validCall": {
+      "arguments": {
+        "start_date": "2026-09-25",
+        "end_date": "2026-09-25",
+        "account_id": "sample-fixture-id",
+        "category_id": "sample-fixture-id",
+        "list_mode": "cashflow",
+        "page": 1,
+        "per_page": 80
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "list_transferences": {
+    "name": "list_transferences",
+    "validCall": {
+      "arguments": {
+        "start_date": "2026-09-25",
+        "end_date": "2026-09-25",
+        "page": 1
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "list_budgets": {
+    "name": "list_budgets",
+    "validCall": {
+      "arguments": {
+        "year": 1,
+        "month": 1
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "list_recurrences": {
+    "name": "list_recurrences",
+    "validCall": {
+      "arguments": {}
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "list_institutions": {
+    "name": "list_institutions",
+    "validCall": {
+      "arguments": {
+        "query": "exemplo"
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "get_credit_card_invoices": {
+    "name": "get_credit_card_invoices",
+    "validCall": {
+      "arguments": {
+        "credit_card_id": "sample-fixture-id"
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "get_credit_card_invoice": {
+    "name": "get_credit_card_invoice",
+    "validCall": {
+      "arguments": {
+        "credit_card_id": "sample-fixture-id",
+        "invoice_id": "sample-fixture-id"
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "get_invoices_matrix": {
+    "name": "get_invoices_matrix",
+    "validCall": {
+      "arguments": {
+        "year": 1
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "get_transaction": {
+    "name": "get_transaction",
+    "validCall": {
+      "arguments": {
+        "id": "sample-fixture-id"
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "search_transactions": {
+    "name": "search_transactions",
+    "validCall": {
+      "arguments": {
+        "query": "exemplo",
+        "start_date": "2026-09-25",
+        "end_date": "2026-09-25",
+        "page": 1
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "get_latest_imports": {
+    "name": "get_latest_imports",
+    "validCall": {
+      "arguments": {
+        "page": 1,
+        "per_page": 50
+      }
+    },
+    "expectedReturnSample": {
+      "status": "OPEN_FINANCE_DISABLED",
+      "isMockFixture": true
+    }
+  },
+  "get_bank_connections": {
+    "name": "get_bank_connections",
+    "validCall": {
+      "arguments": {}
+    },
+    "expectedReturnSample": {
+      "status": "OPEN_FINANCE_DISABLED",
+      "isMockFixture": true
+    }
+  },
+  "get_open_finance_status": {
+    "name": "get_open_finance_status",
+    "validCall": {
+      "arguments": {
+        "bank": "exemplo"
+      }
+    },
+    "expectedReturnSample": {
+      "status": "OPEN_FINANCE_DISABLED",
+      "isMockFixture": true
+    }
+  },
+  "resolve_entity": {
+    "name": "resolve_entity",
+    "validCall": {
+      "arguments": {
+        "query": "exemplo",
+        "entity_type": "account"
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "get_financial_summary": {
+    "name": "get_financial_summary",
+    "validCall": {
+      "arguments": {
+        "start_date": "2026-09-25",
+        "end_date": "2026-09-25"
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "transactions_list_results": {
+    "name": "transactions_list_results",
+    "validCall": {
+      "arguments": {
+        "start_date": "2026-09-25",
+        "end_date": "2026-09-25",
+        "category_id": "sample-fixture-id"
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "get_income_vs_expenses": {
+    "name": "get_income_vs_expenses",
+    "validCall": {
+      "arguments": {
+        "start_date": "2026-09-25",
+        "end_date": "2026-09-25",
+        "account_id": "sample-fixture-id"
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "get_monthly_overview": {
+    "name": "get_monthly_overview",
+    "validCall": {
+      "arguments": {
+        "month": "2026-09"
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "get_categories_report": {
+    "name": "get_categories_report",
+    "validCall": {
+      "arguments": {
+        "start_date": "2026-09-25",
+        "end_date": "2026-09-25"
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "get_categories_evolution": {
+    "name": "get_categories_evolution",
+    "validCall": {
+      "arguments": {
+        "start_date": "2026-09-25",
+        "end_date": "2026-09-25",
+        "group_by": "day"
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "get_tags_report": {
+    "name": "get_tags_report",
+    "validCall": {
+      "arguments": {
+        "start_date": "2026-09-25",
+        "end_date": "2026-09-25"
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "get_budget_summary": {
+    "name": "get_budget_summary",
+    "validCall": {
+      "arguments": {
+        "month": "2026-09"
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "get_upcoming_bills": {
+    "name": "get_upcoming_bills",
+    "validCall": {
+      "arguments": {
+        "days": 7
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "get_balances": {
+    "name": "get_balances",
+    "validCall": {
+      "arguments": {}
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "get_cashflow_forecast": {
+    "name": "get_cashflow_forecast",
+    "validCall": {
+      "arguments": {
+        "days": 30
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "find_duplicates": {
+    "name": "find_duplicates",
+    "validCall": {
+      "arguments": {
+        "month": "2026-09"
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "find_installments": {
+    "name": "find_installments",
+    "validCall": {
+      "arguments": {
+        "account_id": "sample-fixture-id",
+        "credit_card_id": "sample-fixture-id"
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "find_subscriptions": {
+    "name": "find_subscriptions",
+    "validCall": {
+      "arguments": {
+        "months": 6
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "suggest_categories": {
+    "name": "suggest_categories",
+    "validCall": {
+      "arguments": {
+        "descriptions": []
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "load_skill": {
+    "name": "load_skill",
+    "validCall": {
+      "arguments": {
+        "skill_name": "exemplo"
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "create_transaction": {
+    "name": "create_transaction",
+    "validCall": {
+      "arguments": {
+        "description": "exemplo",
+        "amount": 100.5,
+        "date": "2026-09-25",
+        "is_income": true,
+        "account_name": "exemplo",
+        "credit_card_name": "exemplo",
+        "category_name": "exemplo",
+        "tags": [],
+        "notes": "exemplo",
+        "paid": true
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "update_transaction": {
+    "name": "update_transaction",
+    "validCall": {
+      "arguments": {
+        "id": "sample-fixture-id",
+        "description": "exemplo",
+        "amount": 100.5,
+        "category_name": "exemplo",
+        "notes": "exemplo",
+        "tags": [],
+        "paid": true
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "delete_transaction": {
+    "name": "delete_transaction",
+    "validCall": {
+      "arguments": {
+        "id": "sample-fixture-id"
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "set_transaction_paid": {
+    "name": "set_transaction_paid",
+    "validCall": {
+      "arguments": {
+        "id": "sample-fixture-id",
+        "paid": true
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "create_transfer": {
+    "name": "create_transfer",
+    "validCall": {
+      "arguments": {
+        "amount": 100.5,
+        "date": "2026-09-25",
+        "source_account": "exemplo",
+        "destination_account": "exemplo",
+        "notes": "exemplo"
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "inform_invoice_payment": {
+    "name": "inform_invoice_payment",
+    "validCall": {
+      "arguments": {
+        "credit_card_id": "sample-fixture-id",
+        "invoice_id": "sample-fixture-id",
+        "amount": 100.5
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "register_invoice_payment": {
+    "name": "register_invoice_payment",
+    "validCall": {
+      "arguments": {
+        "credit_card_id": "sample-fixture-id",
+        "invoice_id": "sample-fixture-id",
+        "amount": 100.5,
+        "account_id": "sample-fixture-id",
+        "date": "exemplo"
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "uninform_invoice_payment": {
+    "name": "uninform_invoice_payment",
+    "validCall": {
+      "arguments": {
+        "credit_card_id": "sample-fixture-id",
+        "invoice_id": "sample-fixture-id"
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "mass_create_transactions": {
+    "name": "mass_create_transactions",
+    "validCall": {
+      "arguments": {
+        "transactions": []
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "mass_update_transactions": {
+    "name": "mass_update_transactions",
+    "validCall": {
+      "arguments": {
+        "filters": {},
+        "updates": {}
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "mass_delete_transactions": {
+    "name": "mass_delete_transactions",
+    "validCall": {
+      "arguments": {
+        "ids": []
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "add_transactions_tags": {
+    "name": "add_transactions_tags",
+    "validCall": {
+      "arguments": {
+        "items": []
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "update_transactions_categories": {
+    "name": "update_transactions_categories",
+    "validCall": {
+      "arguments": {
+        "items": []
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "update_transactions_descriptions": {
+    "name": "update_transactions_descriptions",
+    "validCall": {
+      "arguments": {
+        "items": []
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "mass_manage_categories": {
+    "name": "mass_manage_categories",
+    "validCall": {
+      "arguments": {
+        "operations": []
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "create_account": {
+    "name": "create_account",
+    "validCall": {
+      "arguments": {
+        "name": "exemplo",
+        "institution_id": "sample-fixture-id",
+        "account_type": "exemplo",
+        "opening_balance": 100.5
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "update_account": {
+    "name": "update_account",
+    "validCall": {
+      "arguments": {
+        "id": "sample-fixture-id",
+        "name": "exemplo",
+        "archived": true
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "delete_account": {
+    "name": "delete_account",
+    "validCall": {
+      "arguments": {
+        "id": "sample-fixture-id"
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "create_credit_card": {
+    "name": "create_credit_card",
+    "validCall": {
+      "arguments": {
+        "name": "exemplo",
+        "closing_day": 1,
+        "due_day": 1,
+        "credit_limit": 100.5,
+        "brand": "exemplo"
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "update_credit_card": {
+    "name": "update_credit_card",
+    "validCall": {
+      "arguments": {
+        "id": "sample-fixture-id",
+        "name": "exemplo",
+        "closing_day": 1,
+        "due_day": 1,
+        "credit_limit": 100.5,
+        "archived": true
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "delete_credit_card": {
+    "name": "delete_credit_card",
+    "validCall": {
+      "arguments": {
+        "id": "sample-fixture-id"
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "create_category": {
+    "name": "create_category",
+    "validCall": {
+      "arguments": {
+        "name": "exemplo",
+        "is_income": true,
+        "parent_id": "sample-fixture-id",
+        "color": "exemplo"
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "update_category": {
+    "name": "update_category",
+    "validCall": {
+      "arguments": {
+        "id": "sample-fixture-id",
+        "name": "exemplo",
+        "color": "exemplo",
+        "parent_id": "sample-fixture-id",
+        "archived": true
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "delete_category": {
+    "name": "delete_category",
+    "validCall": {
+      "arguments": {
+        "id": "sample-fixture-id",
+        "replacement_category_id": "sample-fixture-id"
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "create_budget": {
+    "name": "create_budget",
+    "validCall": {
+      "arguments": {
+        "category_name": "exemplo",
+        "amount": 100.5,
+        "activity_type": "spending"
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "update_budget": {
+    "name": "update_budget",
+    "validCall": {
+      "arguments": {
+        "category_id": "sample-fixture-id",
+        "amount": 100.5
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "delete_budget": {
+    "name": "delete_budget",
+    "validCall": {
+      "arguments": {
+        "category_id": "sample-fixture-id"
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  },
+  "clone_budgets": {
+    "name": "clone_budgets",
+    "validCall": {
+      "arguments": {
+        "source_month": "2026-09",
+        "target_month": "2026-09"
+      }
+    },
+    "expectedReturnSample": {
+      "status": "ok",
+      "isMockFixture": true
+    }
+  }
+}
