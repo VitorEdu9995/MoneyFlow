@@ -1,0 +1,1518 @@
+{
+  "get_account_context": {
+    "name": "get_account_context",
+    "description": "Retorna contexto inicial em uma chamada: entidade conectada, plano, data local e listas compactas de contas, cartões e categorias.",
+    "rules": "Útil no início para evitar várias consultas list_*.",
+    "section": "2. Consultas e listagens",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  },
+  "list_accounts": {
+    "name": "list_accounts",
+    "description": "Lista contas bancárias do usuário com IDs.",
+    "rules": "Use para resolver conta antes de operações.",
+    "section": "2. Consultas e listagens",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "include_archived": {
+          "type": "boolean",
+          "description": "Incluir contas arquivadas"
+        }
+      },
+      "required": []
+    }
+  },
+  "list_credit_cards": {
+    "name": "list_credit_cards",
+    "description": "Lista cartões de crédito com IDs e limites.",
+    "rules": "Cartões automáticos/conectados têm restrições diferentes dos manuais.",
+    "section": "2. Consultas e listagens",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "include_archived": {
+          "type": "boolean",
+          "description": "Incluir cartões arquivados"
+        }
+      },
+      "required": []
+    }
+  },
+  "list_categories": {
+    "name": "list_categories",
+    "description": "Lista categorias usadas para classificar transações.",
+    "rules": "Usar antes de criar/editar quando a categoria não for conhecida.",
+    "section": "2. Consultas e listagens",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "expense",
+            "income"
+          ],
+          "description": "Filtrar por tipo"
+        }
+      },
+      "required": []
+    }
+  },
+  "list_transactions": {
+    "name": "list_transactions",
+    "description": "Lista transações por período, com paginação.",
+    "rules": "Máximo de 80 por página. O padrão cashflow não mostra compras individuais de cartão. Para análise por categoria, use list_mode='all_transactions' ou category_id. Use period_totals para o período completo; não some página truncada. Detalhes crus de Open Finance requerem get_transaction.",
+    "section": "2. Consultas e listagens",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "start_date": {
+          "type": "string",
+          "description": "Data de início (YYYY-MM-DD)"
+        },
+        "end_date": {
+          "type": "string",
+          "description": "Data de fim (YYYY-MM-DD)"
+        },
+        "account_id": {
+          "type": "string",
+          "description": "ID da conta"
+        },
+        "category_id": {
+          "type": "string",
+          "description": "ID da categoria"
+        },
+        "list_mode": {
+          "type": "string",
+          "enum": [
+            "cashflow",
+            "all_transactions"
+          ],
+          "description": "Modo de listagem"
+        },
+        "page": {
+          "type": "integer",
+          "description": "Número da página",
+          "default": 1
+        },
+        "per_page": {
+          "type": "integer",
+          "description": "Registros por página (máx 80)",
+          "default": 80
+        }
+      },
+      "required": []
+    }
+  },
+  "list_transferences": {
+    "name": "list_transferences",
+    "description": "Lista transferências entre contas com paginação.",
+    "rules": "Datas em YYYY-MM-DD.",
+    "section": "2. Consultas e listagens",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "start_date": {
+          "type": "string",
+          "description": "Data de início (YYYY-MM-DD)"
+        },
+        "end_date": {
+          "type": "string",
+          "description": "Data de fim (YYYY-MM-DD)"
+        },
+        "page": {
+          "type": "integer",
+          "description": "Número da página",
+          "default": 1
+        }
+      },
+      "required": []
+    }
+  },
+  "list_budgets": {
+    "name": "list_budgets",
+    "description": "Lista limites/orçamentos por categoria.",
+    "rules": "Pode filtrar por ano e/ou mês.",
+    "section": "2. Consultas e listagens",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "year": {
+          "type": "integer",
+          "description": "Ano do orçamento"
+        },
+        "month": {
+          "type": "integer",
+          "description": "Mês do orçamento"
+        }
+      },
+      "required": []
+    }
+  },
+  "list_recurrences": {
+    "name": "list_recurrences",
+    "description": "Lista contas fixas recorrentes cadastradas, com periodicidade, valor e próxima ocorrência.",
+    "rules": "Traz recorrências manuais; em conexões Open Finance pode retornar vazio. Não inclui parcelamentos; para eles use find_installments.",
+    "section": "2. Consultas e listagens",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  },
+  "list_institutions": {
+    "name": "list_institutions",
+    "description": "Lista instituições financeiras e IDs/slug usados em contas ou cartões.",
+    "rules": "Aceita filtro por nome (query).",
+    "section": "2. Consultas e listagens",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Termo de busca para nome de instituição"
+        }
+      },
+      "required": []
+    }
+  },
+  "get_credit_card_invoices": {
+    "name": "get_credit_card_invoices",
+    "description": "Lista faturas de um cartão.",
+    "rules": "Requer credit_card_id.",
+    "section": "2. Consultas e listagens",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "credit_card_id": {
+          "type": "string",
+          "description": "ID do cartão de crédito"
+        }
+      },
+      "required": [
+        "credit_card_id"
+      ]
+    }
+  },
+  "get_credit_card_invoice": {
+    "name": "get_credit_card_invoice",
+    "description": "Retorna detalhes de uma fatura específica, incluindo transações, pagamentos e gastos por categoria.",
+    "rules": "Prefira o nome do cartão quando disponível para resolução.",
+    "section": "2. Consultas e listagens",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "credit_card_id": {
+          "type": "string",
+          "description": "ID do cartão de crédito"
+        },
+        "invoice_id": {
+          "type": "string",
+          "description": "ID da fatura"
+        }
+      },
+      "required": [
+        "credit_card_id",
+        "invoice_id"
+      ]
+    }
+  },
+  "get_invoices_matrix": {
+    "name": "get_invoices_matrix",
+    "description": "Monta matriz mês × cartão com totais por mês, cartão e geral.",
+    "rules": "Indicado para vários cartões/meses; padrão é ano atual e todos os cartões. Usa os valores da ferramenta de faturas, evitando soma manual.",
+    "section": "2. Consultas e listagens",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "year": {
+          "type": "integer",
+          "description": "Ano de referência"
+        }
+      },
+      "required": []
+    }
+  },
+  "get_transaction": {
+    "name": "get_transaction",
+    "description": "Obtém detalhes completos de uma transação por ID ou UUID.",
+    "rules": "Use para inspecionar detalhes Open Finance omitidos da listagem.",
+    "section": "2. Consultas e listagens",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "ID ou UUID da transação"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    }
+  },
+  "search_transactions": {
+    "name": "search_transactions",
+    "description": "Pesquisa transações por texto na descrição, observação ou tags.",
+    "rules": "Paginação. Sem datas, o padrão são os últimos 6 meses.",
+    "section": "2. Consultas e listagens",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Termo de pesquisa (descrição, observação, tags)"
+        },
+        "start_date": {
+          "type": "string",
+          "description": "Data de início (YYYY-MM-DD)"
+        },
+        "end_date": {
+          "type": "string",
+          "description": "Data de fim (YYYY-MM-DD)"
+        },
+        "page": {
+          "type": "integer",
+          "description": "Número da página",
+          "default": 1
+        }
+      },
+      "required": []
+    }
+  },
+  "get_latest_imports": {
+    "name": "get_latest_imports",
+    "description": "Lista transações importadas mais recentemente via Open Finance.",
+    "rules": "Paginação; padrão 50, máximo 100 por página.",
+    "section": "2. Consultas e listagens",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "page": {
+          "type": "integer",
+          "description": "Número da página",
+          "default": 1
+        },
+        "per_page": {
+          "type": "integer",
+          "description": "Quantidade por página (máx 100)",
+          "default": 50
+        }
+      },
+      "required": []
+    }
+  },
+  "get_bank_connections": {
+    "name": "get_bank_connections",
+    "description": "Lista conexões bancárias Open Finance ativas e o estado de cada uma.",
+    "rules": "Somente leitura; não força sincronização.",
+    "section": "2. Consultas e listagens",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  },
+  "get_open_finance_status": {
+    "name": "get_open_finance_status",
+    "description": "Consulta ao vivo o estado do agregador Open Finance (Belvo), opcionalmente por banco.",
+    "rules": "Resultado cacheado por cerca de 5 minutos. Útil para diagnosticar instabilidade do provedor.",
+    "section": "2. Consultas e listagens",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "bank": {
+          "type": "string",
+          "description": "Filtrar por banco específico"
+        }
+      },
+      "required": []
+    }
+  },
+  "resolve_entity": {
+    "name": "resolve_entity",
+    "description": "Resolve um nome aproximado para ID/UUID de conta, cartão ou categoria.",
+    "rules": "Se houver ambiguidade, retorna correspondências candidatas. Usar antes de escrever em caso de nomes incertos.",
+    "section": "2. Consultas e listagens",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Nome aproximado da entidade"
+        },
+        "entity_type": {
+          "type": "string",
+          "enum": [
+            "account",
+            "card",
+            "category"
+          ],
+          "description": "Tipo de entidade a resolver"
+        }
+      },
+      "required": [
+        "query"
+      ]
+    }
+  },
+  "get_financial_summary": {
+    "name": "get_financial_summary",
+    "description": "Resume receitas, despesas, comparação entre períodos e maiores gastos.",
+    "rules": "Totais usam base caixa; maiores gastos usam base por lançamento e incluem cartão. Esses valores não devem ser somados entre si.",
+    "section": "3. Relatórios, métricas e análises",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "start_date": {
+          "type": "string",
+          "description": "Data de início (YYYY-MM-DD)"
+        },
+        "end_date": {
+          "type": "string",
+          "description": "Data de fim (YYYY-MM-DD)"
+        }
+      },
+      "required": []
+    }
+  },
+  "transactions_list_results": {
+    "name": "transactions_list_results",
+    "description": "Retorna totais do período: receitas, despesas, resultado, saldo e previstos, sem paginar linha a linha.",
+    "rules": "Ideal para perguntas como “quanto gastei?” ou “qual meu saldo?”. Padrão mês atual; caixa por padrão, mas category_id muda para base por lançamento. Não misture bases.",
+    "section": "3. Relatórios, métricas e análises",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "start_date": {
+          "type": "string",
+          "description": "Data de início (YYYY-MM-DD)"
+        },
+        "end_date": {
+          "type": "string",
+          "description": "Data de fim (YYYY-MM-DD)"
+        },
+        "category_id": {
+          "type": "string",
+          "description": "ID da categoria"
+        }
+      },
+      "required": []
+    }
+  },
+  "get_income_vs_expenses": {
+    "name": "get_income_vs_expenses",
+    "description": "Relatório de receitas contra despesas por período.",
+    "rules": "Modo caixa; padrão mês atual. Pode filtrar conta. Exclui compras individuais de cartão e considera pagamento de fatura.",
+    "section": "3. Relatórios, métricas e análises",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "start_date": {
+          "type": "string",
+          "description": "Data de início (YYYY-MM-DD)"
+        },
+        "end_date": {
+          "type": "string",
+          "description": "Data de fim (YYYY-MM-DD)"
+        },
+        "account_id": {
+          "type": "string",
+          "description": "ID da conta"
+        }
+      },
+      "required": []
+    }
+  },
+  "get_monthly_overview": {
+    "name": "get_monthly_overview",
+    "description": "Visão mensal com receitas, despesas, saldo, maiores categorias, status de orçamento e contas a pagar próximas.",
+    "rules": "Padrão mês atual. Totais são base caixa; categorias superiores são base por lançamento e não somam com totals.expenses.",
+    "section": "3. Relatórios, métricas e análises",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "month": {
+          "type": "string",
+          "description": "Mês no formato YYYY-MM"
+        }
+      },
+      "required": []
+    }
+  },
+  "get_categories_report": {
+    "name": "get_categories_report",
+    "description": "Agrupa receitas e despesas por categoria, com percentuais e subcategorias.",
+    "rules": "Inclui compras de cartão; base por lançamento. Padrão mês atual.",
+    "section": "3. Relatórios, métricas e análises",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "start_date": {
+          "type": "string",
+          "description": "Data de início (YYYY-MM-DD)"
+        },
+        "end_date": {
+          "type": "string",
+          "description": "Data de fim (YYYY-MM-DD)"
+        }
+      },
+      "required": []
+    }
+  },
+  "get_categories_evolution": {
+    "name": "get_categories_evolution",
+    "description": "Mostra evolução de receitas/despesas por categoria ao longo do tempo.",
+    "rules": "Pode agrupar por dia, semana ou mês; padrão últimos 3 meses.",
+    "section": "3. Relatórios, métricas e análises",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "start_date": {
+          "type": "string",
+          "description": "Data de início (YYYY-MM-DD)"
+        },
+        "end_date": {
+          "type": "string",
+          "description": "Data de fim (YYYY-MM-DD)"
+        },
+        "group_by": {
+          "type": "string",
+          "enum": [
+            "day",
+            "week",
+            "month"
+          ],
+          "default": "month"
+        }
+      },
+      "required": []
+    }
+  },
+  "get_tags_report": {
+    "name": "get_tags_report",
+    "description": "Agrupa transações por tag, com valores e percentuais.",
+    "rules": "Padrão mês atual; informar datas amplas para históricos longos/projetos.",
+    "section": "3. Relatórios, métricas e análises",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "start_date": {
+          "type": "string",
+          "description": "Data de início (YYYY-MM-DD)"
+        },
+        "end_date": {
+          "type": "string",
+          "description": "Data de fim (YYYY-MM-DD)"
+        }
+      },
+      "required": []
+    }
+  },
+  "get_budget_summary": {
+    "name": "get_budget_summary",
+    "description": "Resume os orçamentos do mês e identifica limites excedidos ou próximos.",
+    "rules": "Padrão mês atual.",
+    "section": "3. Relatórios, métricas e análises",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "month": {
+          "type": "string",
+          "description": "Mês no formato YYYY-MM"
+        }
+      },
+      "required": []
+    }
+  },
+  "get_upcoming_bills": {
+    "name": "get_upcoming_bills",
+    "description": "Lista contas não pagas e faturas de cartão com vencimento nos próximos dias.",
+    "rules": "Padrão 7 dias.",
+    "section": "3. Relatórios, métricas e análises",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "days": {
+          "type": "integer",
+          "description": "Dias para frente",
+          "default": 7
+        }
+      },
+      "required": []
+    }
+  },
+  "get_balances": {
+    "name": "get_balances",
+    "description": "Lista saldo por conta, faturas atuais abertas por cartão e patrimônio simplificado (contas menos faturas abertas).",
+    "rules": "Base caixa; não trata parcelas ou faturas futuras como dívida.",
+    "section": "3. Relatórios, métricas e análises",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  },
+  "get_cashflow_forecast": {
+    "name": "get_cashflow_forecast",
+    "description": "Projeta fluxo de caixa com saldo atual e transações futuras não pagas em contas manuais.",
+    "rules": "Padrão próximos 30 dias; retorna saldo projetado e menor ponto. Não projeta faturas de cartão.",
+    "section": "3. Relatórios, métricas e análises",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "days": {
+          "type": "integer",
+          "description": "Dias de projeção",
+          "default": 30
+        }
+      },
+      "required": []
+    }
+  },
+  "find_duplicates": {
+    "name": "find_duplicates",
+    "description": "Encontra transações possivelmente duplicadas com valores iguais e descrições parecidas em datas próximas.",
+    "rules": "Padrão mês atual. Útil antes de correções/exclusões, não prova por si só que são duplicatas.",
+    "section": "3. Relatórios, métricas e análises",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "month": {
+          "type": "string",
+          "description": "Mês no formato YYYY-MM"
+        }
+      },
+      "required": []
+    }
+  },
+  "find_installments": {
+    "name": "find_installments",
+    "description": "Identifica compras parceladas por dados estruturados e heurística.",
+    "rules": "Use em vez de pesquisa textual para parcelamentos. Sem datas, últimos 12 meses; pode filtrar conta/cartão. Resultados heurísticos são apresentados como possíveis parcelamentos.",
+    "section": "3. Relatórios, métricas e análises",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "account_id": {
+          "type": "string",
+          "description": "ID da conta"
+        },
+        "credit_card_id": {
+          "type": "string",
+          "description": "ID do cartão"
+        }
+      },
+      "required": []
+    }
+  },
+  "find_subscriptions": {
+    "name": "find_subscriptions",
+    "description": "Detecta assinaturas e serviços recorrentes em conexões Open Finance.",
+    "rules": "Combina recorrências cadastradas e heurística de repetição de estabelecimento; classifica estabilidade do valor. Não inclui parcelamentos. Sem datas, últimos 6 meses.",
+    "section": "3. Relatórios, métricas e análises",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "months": {
+          "type": "integer",
+          "description": "Meses de análise",
+          "default": 6
+        }
+      },
+      "required": []
+    }
+  },
+  "suggest_categories": {
+    "name": "suggest_categories",
+    "description": "Sugere categoria para uma ou mais descrições.",
+    "rules": "Considera edições anteriores do usuário, histórico categorizado e padrões gerais. Retorna confiança e força semântica. Usar antes de criar lotes categorizados e revisar confiança.",
+    "section": "3. Relatórios, métricas e análises",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "descriptions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Lista de descrições para categorização"
+        }
+      },
+      "required": [
+        "descriptions"
+      ]
+    }
+  },
+  "load_skill": {
+    "name": "load_skill",
+    "description": "Carrega guia detalhado de uso de um tema da Organizze.",
+    "rules": "A descrição recomenda chamar antes de responder quando a conversa envolver tema coberto por guia específico.",
+    "section": "3. Relatórios, métricas e análises",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "skill_name": {
+          "type": "string",
+          "description": "Nome do guia/skill"
+        }
+      },
+      "required": [
+        "skill_name"
+      ]
+    }
+  },
+  "create_transaction": {
+    "name": "create_transaction",
+    "description": "Cria receita ou despesa.",
+    "rules": "is_income é obrigatório; valor é positivo e o booleano define receita/despesa. Requer descrição, valor, data e conta/cartão. Aceita conta/categoria pelo nome, tags, observação, recorrência e quantidade de parcelas. Não há parâmetro para anexar arquivo no esquema do MCP consultado.",
+    "section": "4. Criação e manutenção de transações e transferências",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": "string",
+          "description": "Descrição do lançamento"
+        },
+        "amount": {
+          "type": "number",
+          "description": "Valor positivo em moeda"
+        },
+        "date": {
+          "type": "string",
+          "description": "Data da transação (YYYY-MM-DD)"
+        },
+        "is_income": {
+          "type": "boolean",
+          "description": "Verdadeiro para receita, falso para despesa"
+        },
+        "account_name": {
+          "type": "string",
+          "description": "Nome ou ID da conta"
+        },
+        "credit_card_name": {
+          "type": "string",
+          "description": "Nome ou ID do cartão"
+        },
+        "category_name": {
+          "type": "string",
+          "description": "Nome ou ID da categoria"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Lista de tags"
+        },
+        "notes": {
+          "type": "string",
+          "description": "Observações"
+        },
+        "paid": {
+          "type": "boolean",
+          "description": "Status pago/recebido"
+        }
+      },
+      "required": [
+        "description",
+        "amount",
+        "date",
+        "is_income"
+      ]
+    }
+  },
+  "update_transaction": {
+    "name": "update_transaction",
+    "description": "Atualiza campos de transação existente.",
+    "rules": "Passe somente campos a alterar. ID/UUID deve vir de listagem/pesquisa/detalhe recente. Em transações automáticas só descrição, categoria, observação e tags podem mudar. Para mudar fatura de compra manual use credit_card_invoice_id ou recompute_invoice=true; mudar somente data mantém fatura atual.",
+    "section": "4. Criação e manutenção de transações e transferências",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "ID ou UUID da transação"
+        },
+        "description": {
+          "type": "string"
+        },
+        "amount": {
+          "type": "number"
+        },
+        "category_name": {
+          "type": "string"
+        },
+        "notes": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "paid": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    }
+  },
+  "delete_transaction": {
+    "name": "delete_transaction",
+    "description": "Exclui uma transação.",
+    "rules": "Transações automáticas não podem ser excluídas. ID/UUID deve vir de consulta recente. Em recorrências, use delete_recurrence para remover a regra (esta ferramenta não aparece na lista disponível) ou confirme o escopo da operação; exclusões em lote têm ferramenta própria.",
+    "section": "4. Criação e manutenção de transações e transferências",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "ID ou UUID da transação a excluir"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    }
+  },
+  "set_transaction_paid": {
+    "name": "set_transaction_paid",
+    "description": "Marca transação como paga/recebida ou não paga.",
+    "rules": "Para contas manuais. Idempotente. Transações automáticas são sempre consideradas pagas.",
+    "section": "4. Criação e manutenção de transações e transferências",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "ID da transação"
+        },
+        "paid": {
+          "type": "boolean",
+          "description": "Novo status de pagamento"
+        }
+      },
+      "required": [
+        "id",
+        "paid"
+      ]
+    }
+  },
+  "create_transfer": {
+    "name": "create_transfer",
+    "description": "Cria transferência entre duas contas bancárias.",
+    "rules": "Pode aceitar recorrência; não envolve cartão de crédito. Prefira nomes de contas resolvidos pela listagem/contexto.",
+    "section": "4. Criação e manutenção de transações e transferências",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "amount": {
+          "type": "number",
+          "description": "Valor transferido"
+        },
+        "date": {
+          "type": "string",
+          "description": "Data da transferência (YYYY-MM-DD)"
+        },
+        "source_account": {
+          "type": "string",
+          "description": "Nome ou ID da conta de origem"
+        },
+        "destination_account": {
+          "type": "string",
+          "description": "Nome ou ID da conta de destino"
+        },
+        "notes": {
+          "type": "string",
+          "description": "Observações"
+        }
+      },
+      "required": [
+        "amount",
+        "date",
+        "source_account",
+        "destination_account"
+      ]
+    }
+  },
+  "inform_invoice_payment": {
+    "name": "inform_invoice_payment",
+    "description": "Informa pagamento de fatura de cartão automático/Open Finance.",
+    "rules": "Representa sinalização enquanto aguarda confirmação da fonte bancária.",
+    "section": "4. Criação e manutenção de transações e transferências",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "credit_card_id": {
+          "type": "string",
+          "description": "ID do cartão"
+        },
+        "invoice_id": {
+          "type": "string",
+          "description": "ID ou mês da fatura"
+        },
+        "amount": {
+          "type": "number",
+          "description": "Valor pago"
+        }
+      },
+      "required": [
+        "credit_card_id",
+        "invoice_id",
+        "amount"
+      ]
+    }
+  },
+  "register_invoice_payment": {
+    "name": "register_invoice_payment",
+    "description": "Registra pagamento de fatura de cartão manual como lançamento vinculado à fatura.",
+    "rules": "Para cartões manuais. Obtenha faturas primeiro via get_credit_card_invoices; passe ID ou mês YYYY-MM. Prefira nomes de cartão/conta.",
+    "section": "4. Criação e manutenção de transações e transferências",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "credit_card_id": {
+          "type": "string",
+          "description": "ID do cartão"
+        },
+        "invoice_id": {
+          "type": "string",
+          "description": "ID ou mês da fatura"
+        },
+        "amount": {
+          "type": "number",
+          "description": "Valor pago"
+        },
+        "account_id": {
+          "type": "string",
+          "description": "Conta de origem do pagamento"
+        },
+        "date": {
+          "type": "string",
+          "description": "Data do pagamento"
+        }
+      },
+      "required": [
+        "credit_card_id",
+        "invoice_id",
+        "amount",
+        "account_id",
+        "date"
+      ]
+    }
+  },
+  "uninform_invoice_payment": {
+    "name": "uninform_invoice_payment",
+    "description": "Desfaz sinalização de pagamento de fatura automática ainda aguardando confirmação.",
+    "rules": "Exige data/ID da fatura. Não remove pagamentos reais já confirmados pelo Open Finance.",
+    "section": "4. Criação e manutenção de transações e transferências",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "credit_card_id": {
+          "type": "string",
+          "description": "ID do cartão"
+        },
+        "invoice_id": {
+          "type": "string",
+          "description": "ID da fatura"
+        }
+      },
+      "required": [
+        "credit_card_id",
+        "invoice_id"
+      ]
+    }
+  },
+  "mass_create_transactions": {
+    "name": "mass_create_transactions",
+    "description": "Cria várias transações em uma chamada.",
+    "rules": "Máximo 100. Cada linha deve ser única por descrição+valor+data+conta; deduplicar antes de enviar. Não usar para importar CSV/OFX com snapshot canônico; a orientação é usar a importação do app ou linhas sem fingerprint de anexo. A chamada MCP executa sem confirmação interativa.",
+    "section": "5. Operações em lote",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "transactions": {
+          "type": "array",
+          "description": "Lista de transações a criar (máx 100)",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "transactions"
+      ]
+    }
+  },
+  "mass_update_transactions": {
+    "name": "mass_update_transactions",
+    "description": "Atualiza várias transações por filtro de busca.",
+    "rules": "Máximo 200. Antes, valide os mesmos filtros com listagem/pesquisa. Informe ao menos um filtro e um campo alterável. Conjunto vazio ou maior que o limite exige refinamento. Alterações em lote podem ser irreversíveis.",
+    "section": "5. Operações em lote",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "filters": {
+          "type": "object",
+          "description": "Filtros para selecionar as transações"
+        },
+        "updates": {
+          "type": "object",
+          "description": "Campos a atualizar"
+        }
+      },
+      "required": [
+        "filters",
+        "updates"
+      ]
+    }
+  },
+  "mass_delete_transactions": {
+    "name": "mass_delete_transactions",
+    "description": "Exclui várias transações por IDs/UUIDs.",
+    "rules": "Máximo 500. IDs devem vir de uma busca recente; nunca invente. Transações automáticas são ignoradas; recorrentes afetam apenas a ocorrência atual. Operação destrutiva.",
+    "section": "5. Operações em lote",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "ids": {
+          "type": "array",
+          "description": "IDs das transações a excluir (máx 500)",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "ids"
+      ]
+    }
+  },
+  "add_transactions_tags": {
+    "name": "add_transactions_tags",
+    "description": "Adiciona tags a várias transações.",
+    "rules": "Máximo 200; acumula às tags existentes. Cada item informa ID/UUID e tags, como texto separado por vírgulas ou lista.",
+    "section": "5. Operações em lote",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "description": "Lista de itens com transação e tags (máx 200)",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "id",
+              "tags"
+            ]
+          }
+        }
+      },
+      "required": [
+        "items"
+      ]
+    }
+  },
+  "update_transactions_categories": {
+    "name": "update_transactions_categories",
+    "description": "Define categoria de várias transações, podendo escolher destino por linha.",
+    "rules": "Máximo 200. Útil quando cada transação tem categoria diferente, por exemplo após suggest_categories. Prefira nome de categoria e IDs obtidos no turno atual. Se todas receberão a mesma categoria, prefira mass_update_transactions.",
+    "section": "5. Operações em lote",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "description": "Mapeamento de transação para categoria (máx 200)",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "category_name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "category_name"
+            ]
+          }
+        }
+      },
+      "required": [
+        "items"
+      ]
+    }
+  },
+  "update_transactions_descriptions": {
+    "name": "update_transactions_descriptions",
+    "description": "Substitui descrições de várias transações.",
+    "rules": "Máximo 200. Aceita ID/UUID e descrição por linha; também aceita um único objeto. Para uma regra comum a todas, prefira mass_update_transactions.",
+    "section": "5. Operações em lote",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "description": "Mapeamento de transação para descrição (máx 200)",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "description"
+            ]
+          }
+        }
+      },
+      "required": [
+        "items"
+      ]
+    }
+  },
+  "mass_manage_categories": {
+    "name": "mass_manage_categories",
+    "description": "Aplica mudanças em lote na árvore de categorias.",
+    "rules": "Máximo 100 operações; mudanças atômicas: se uma falhar, nenhuma é aplicada. Operações: criar, renomear, mover (pai 0 para raiz), arquivar e desarquivar. Não exclui categorias. Resolve por nome.",
+    "section": "5. Operações em lote",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "operations": {
+          "type": "array",
+          "description": "Operações atômicas na árvore de categorias (máx 100)",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "operations"
+      ]
+    }
+  },
+  "create_account": {
+    "name": "create_account",
+    "description": "Cria conta bancária manual.",
+    "rules": "Usar nomes/IDs válidos de instituição conforme list_institutions quando aplicável.",
+    "section": "6. Contas, cartões, categorias e orçamentos",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Nome da conta"
+        },
+        "institution_id": {
+          "type": "string",
+          "description": "ID da instituição financeira"
+        },
+        "account_type": {
+          "type": "string",
+          "description": "Tipo de conta"
+        },
+        "opening_balance": {
+          "type": "number",
+          "description": "Saldo inicial"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    }
+  },
+  "update_account": {
+    "name": "update_account",
+    "description": "Atualiza nome, descrição, instituição ou arquivamento da conta.",
+    "rules": "Contas automáticas permitem apenas nome e arquivamento. Prefira nome, sem inventar ID.",
+    "section": "6. Contas, cartões, categorias e orçamentos",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "ID da conta"
+        },
+        "name": {
+          "type": "string"
+        },
+        "archived": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    }
+  },
+  "delete_account": {
+    "name": "delete_account",
+    "description": "Exclui uma conta.",
+    "rules": "**Atenção:** todas as transações daquela conta são apagadas em background. Contas automáticas não podem ser excluídas por essa ferramenta; desconexão deve ser feita no fluxo próprio do app.",
+    "section": "6. Contas, cartões, categorias e orçamentos",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "ID da conta a excluir"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    }
+  },
+  "create_credit_card": {
+    "name": "create_credit_card",
+    "description": "Cria cartão manual.",
+    "rules": "Cartões automáticos vêm da conexão bancária. Faturas são geradas automaticamente após criação.",
+    "section": "6. Contas, cartões, categorias e orçamentos",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Nome do cartão"
+        },
+        "closing_day": {
+          "type": "integer",
+          "description": "Dia de fechamento (1-31)"
+        },
+        "due_day": {
+          "type": "integer",
+          "description": "Dia de vencimento (1-31)"
+        },
+        "credit_limit": {
+          "type": "number",
+          "description": "Limite de crédito"
+        },
+        "brand": {
+          "type": "string",
+          "description": "Bandeira do cartão"
+        }
+      },
+      "required": [
+        "name",
+        "closing_day",
+        "due_day"
+      ]
+    }
+  },
+  "update_credit_card": {
+    "name": "update_credit_card",
+    "description": "Atualiza nome, bandeira, dias de fechamento/vencimento, limite ou arquivamento.",
+    "rules": "Cartões automáticos permitem somente nome e arquivamento. Prefira nome em vez de ID inventado.",
+    "section": "6. Contas, cartões, categorias e orçamentos",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "ID do cartão"
+        },
+        "name": {
+          "type": "string"
+        },
+        "closing_day": {
+          "type": "integer"
+        },
+        "due_day": {
+          "type": "integer"
+        },
+        "credit_limit": {
+          "type": "number"
+        },
+        "archived": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    }
+  },
+  "delete_credit_card": {
+    "name": "delete_credit_card",
+    "description": "Exclui cartão.",
+    "rules": "**Atenção:** todas as transações e faturas do cartão são excluídas. Cartões automáticos não podem ser excluídos por esta ferramenta.",
+    "section": "6. Contas, cartões, categorias e orçamentos",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "ID do cartão a excluir"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    }
+  },
+  "create_category": {
+    "name": "create_category",
+    "description": "Cria categoria de despesa ou receita, raiz ou subcategoria.",
+    "rules": "Categoria filha depende da categoria pai apropriada.",
+    "section": "6. Contas, cartões, categorias e orçamentos",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Nome da categoria"
+        },
+        "is_income": {
+          "type": "boolean",
+          "description": "Receita (true) ou Despesa (false)"
+        },
+        "parent_id": {
+          "type": "string",
+          "description": "ID da categoria pai"
+        },
+        "color": {
+          "type": "string",
+          "description": "Cor em hexadecimal"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    }
+  },
+  "update_category": {
+    "name": "update_category",
+    "description": "Atualiza nome, cor, categoria pai ou arquivamento.",
+    "rules": "Categorias padrão não podem ser excluídas, mas podem ser renomeadas/arquivadas. Prefira nome.",
+    "section": "6. Contas, cartões, categorias e orçamentos",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "ID da categoria"
+        },
+        "name": {
+          "type": "string"
+        },
+        "color": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "archived": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    }
+  },
+  "delete_category": {
+    "name": "delete_category",
+    "description": "Exclui categoria e redireciona transações para categoria substituta ou padrão.",
+    "rules": "Categorias padrão não podem ser excluídas. Excluir categoria raiz também remove subcategorias. Confirmar destino e impacto antes de usar.",
+    "section": "6. Contas, cartões, categorias e orçamentos",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "ID da categoria a excluir"
+        },
+        "replacement_category_id": {
+          "type": "string",
+          "description": "ID da categoria substituta para transações"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    }
+  },
+  "create_budget": {
+    "name": "create_budget",
+    "description": "Cria limite de gastos para uma categoria.",
+    "rules": "Padrão é orçamento de despesa; use activity_type='earning' para meta de receita. Prefira nome da categoria.",
+    "section": "6. Contas, cartões, categorias e orçamentos",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "category_name": {
+          "type": "string",
+          "description": "Nome ou ID da categoria"
+        },
+        "amount": {
+          "type": "number",
+          "description": "Limite monetário"
+        },
+        "activity_type": {
+          "type": "string",
+          "enum": [
+            "spending",
+            "earning"
+          ],
+          "default": "spending"
+        }
+      },
+      "required": [
+        "category_name",
+        "amount"
+      ]
+    }
+  },
+  "update_budget": {
+    "name": "update_budget",
+    "description": "Atualiza valor de orçamento.",
+    "rules": "amount=0 remove o orçamento.",
+    "section": "6. Contas, cartões, categorias e orçamentos",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "category_id": {
+          "type": "string",
+          "description": "ID da categoria"
+        },
+        "amount": {
+          "type": "number",
+          "description": "Novo valor (0 remove o orçamento)"
+        }
+      },
+      "required": [
+        "category_id",
+        "amount"
+      ]
+    }
+  },
+  "delete_budget": {
+    "name": "delete_budget",
+    "description": "Remove um orçamento.",
+    "rules": "Afeta limite da categoria/período informado.",
+    "section": "6. Contas, cartões, categorias e orçamentos",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "category_id": {
+          "type": "string",
+          "description": "ID da categoria"
+        }
+      },
+      "required": [
+        "category_id"
+      ]
+    }
+  },
+  "clone_budgets": {
+    "name": "clone_budgets",
+    "description": "Copia orçamentos do mês anterior para o mês de destino.",
+    "rules": "Não sobrescreve mês que já tenha orçamentos. Padrão é mês atual.",
+    "section": "6. Contas, cartões, categorias e orçamentos",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "source_month": {
+          "type": "string",
+          "description": "Mês de origem (YYYY-MM)"
+        },
+        "target_month": {
+          "type": "string",
+          "description": "Mês de destino (YYYY-MM)"
+        }
+      },
+      "required": []
+    }
+  }
+}
