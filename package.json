@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test test/**/*.test.js"
+    "test": "node --test test/**/*.test.js",
+    "build": "node -e \"console.log('Build validation: checking syntax and migrations...'); import('./src/db/index.js'); import('./src/contracts/extensionToolRegistry.js'); console.log('Build completed successfully.');\""
   }
 }

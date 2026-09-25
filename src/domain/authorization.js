@@ -36,6 +36,18 @@ export const Permissions = Object.freeze({
   CARDS_WRITE: 'cards:write',
   CATEGORIES_WRITE: 'categories:write',
   BUDGETS_WRITE: 'budgets:write',
+
+  // Extensão Fase 1: Compras, Itens, Locais e Histórico
+  PURCHASES_WRITE: 'purchases:write',
+  PURCHASES_READ: 'purchases:read',
+  LOCATIONS_WRITE: 'locations:write',
+  PRODUCTS_WRITE: 'products:write',
+  REFUNDS_WRITE: 'refunds:write',
+
+  // Definições de Atributos e Mesclagens Administrativas
+  ATTRIBUTE_DEFINITIONS_MANAGE: 'attributes:manage',
+  PRODUCTS_MERGE: 'products:merge',
+  LOCATIONS_MERGE: 'locations:merge',
 });
 
 const ROLE_PERMISSIONS = {
@@ -53,6 +65,14 @@ const ROLE_PERMISSIONS = {
     Permissions.CARDS_WRITE,
     Permissions.CATEGORIES_WRITE,
     Permissions.BUDGETS_WRITE,
+    Permissions.PURCHASES_WRITE,
+    Permissions.PURCHASES_READ,
+    Permissions.LOCATIONS_WRITE,
+    Permissions.PRODUCTS_WRITE,
+    Permissions.REFUNDS_WRITE,
+    Permissions.ATTRIBUTE_DEFINITIONS_MANAGE,
+    Permissions.PRODUCTS_MERGE,
+    Permissions.LOCATIONS_MERGE,
   ],
   [Roles.ADMIN]: [
     Permissions.SPACE_READ,
@@ -67,6 +87,14 @@ const ROLE_PERMISSIONS = {
     Permissions.CARDS_WRITE,
     Permissions.CATEGORIES_WRITE,
     Permissions.BUDGETS_WRITE,
+    Permissions.PURCHASES_WRITE,
+    Permissions.PURCHASES_READ,
+    Permissions.LOCATIONS_WRITE,
+    Permissions.PRODUCTS_WRITE,
+    Permissions.REFUNDS_WRITE,
+    Permissions.ATTRIBUTE_DEFINITIONS_MANAGE,
+    Permissions.PRODUCTS_MERGE,
+    Permissions.LOCATIONS_MERGE,
   ],
   [Roles.EDITOR]: [
     Permissions.SPACE_READ,
@@ -78,12 +106,18 @@ const ROLE_PERMISSIONS = {
     Permissions.CARDS_WRITE,
     Permissions.CATEGORIES_WRITE,
     Permissions.BUDGETS_WRITE,
+    Permissions.PURCHASES_WRITE,
+    Permissions.PURCHASES_READ,
+    Permissions.LOCATIONS_WRITE,
+    Permissions.PRODUCTS_WRITE,
+    Permissions.REFUNDS_WRITE,
   ],
   [Roles.VIEWER]: [
     Permissions.SPACE_READ,
     Permissions.MEMBERS_READ,
     Permissions.FINANCE_READ,
     Permissions.REPORTS_READ,
+    Permissions.PURCHASES_READ,
   ],
 };
 

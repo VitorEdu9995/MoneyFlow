@@ -3,21 +3,23 @@ import assert from 'node:assert/strict';
 
 import { createDatabase, runMigrations, rollbackMigration } from '../../src/db/index.js';
 
-test('Migration 001 sobe em banco vazio com integridade e sem dados automáticos', () => {
+test('Migrations estruturais sobem em banco vazio com integridade e sem dados automáticos', () => {
   const db = createDatabase(':memory:');
   const applied = runMigrations(db);
 
-  assert.deepEqual(applied, ['001_initial_schema']);
+  assert.deepEqual(applied, ['001_initial_schema', '002_custom_attributes_and_purchases']);
 
   // Nenhuma tabela possui dados inseridos automaticamente
   const users = db.prepare('SELECT COUNT(*) as count FROM users').get().count;
   const spaces = db.prepare('SELECT COUNT(*) as count FROM spaces').get().count;
   const transactions = db.prepare('SELECT COUNT(*) as count FROM transactions').get().count;
+  const purchases = db.prepare('SELECT COUNT(*) as count FROM purchases').get().count;
   const auditLogs = db.prepare('SELECT COUNT(*) as count FROM audit_logs').get().count;
 
   assert.equal(users, 0);
   assert.equal(spaces, 0);
   assert.equal(transactions, 0);
+  assert.equal(purchases, 0);
   assert.equal(auditLogs, 0);
 
   // Executar novamente não reaplica (idempotente)
@@ -25,11 +27,12 @@ test('Migration 001 sobe em banco vazio com integridade e sem dados automáticos
   assert.deepEqual(reapplied, []);
 });
 
-test('Migration 001 é reversível via rollback explícito', () => {
+test('Migrations são reversíveis via rollback explícito', () => {
   const db = createDatabase(':memory:');
   runMigrations(db);
 
-  // Reversão explícita
+  // Reversão explícita na ordem de dependência (002 e depois 001)
+  rollbackMigration(db, '002_custom_attributes_and_purchases');
   rollbackMigration(db, '001_initial_schema');
 
   // Tabelas foram removidas
@@ -40,5 +43,6 @@ test('Migration 001 é reversível via rollback explícito', () => {
 
   assert.equal(tables.includes('spaces'), false);
   assert.equal(tables.includes('transactions'), false);
+  assert.equal(tables.includes('purchases'), false);
   assert.equal(tables.includes('users'), false);
 });

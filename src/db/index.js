@@ -9,9 +9,11 @@
 
 import { DatabaseSync } from 'node:sqlite';
 import * as initialSchema from './migrations/001_initial_schema.js';
+import * as customAttributesAndPurchases from './migrations/002_custom_attributes_and_purchases.js';
 
 export const MIGRATIONS = [
   { id: '001_initial_schema', module: initialSchema },
+  { id: '002_custom_attributes_and_purchases', module: customAttributesAndPurchases },
 ];
 
 /**
