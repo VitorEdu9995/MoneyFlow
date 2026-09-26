@@ -5,6 +5,8 @@ import { SpaceIsolationService } from '../../src/services/spaceIsolationService.
 import { AttachmentService } from '../../src/services/attachmentService.js';
 import { Roles } from '../../src/domain/authorization.js';
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 
 async function setup() {
   const db = new DatabaseSync(':memory:');
@@ -112,4 +114,53 @@ test('Attachment audit redacts PII embedded in file names before persistence', a
 
   assert.doesNotMatch(audit.new_data, new RegExp(cardNumber.replaceAll(' ', '\\s*')));
   assert.strictEqual(newData.fileName, 'fatura-[REDACTED].pdf');
+});
+
+test('Attachment quota: reserva atômica impede 21 uploads concorrentes de 5 MiB em espaço de editor', async () => {
+  const { db, iso, att } = await setup();
+  const owner = iso.createUser({ name: 'Owner', email: 'owner@quota.test' });
+  const editor = iso.createUser({ name: 'Editor', email: 'editor@quota.test' });
+  const space = iso.createSpace({ name: 'Quota', ownerUserId: owner.id });
+  const ownerContext = iso.resolveAuthContext({ userId: owner.id, spaceId: space.id });
+  iso.addMember(ownerContext, { targetUserId: editor.id, role: Roles.EDITOR });
+  const context = iso.resolveAuthContext({ userId: editor.id, spaceId: space.id });
+  const pdf = Buffer.alloc(5 * 1024 * 1024);
+  Buffer.from('%PDF-1.7\n').copy(pdf);
+
+  const outcomes = await Promise.allSettled(
+    Array.from({ length: 21 }, (_, index) => att.uploadAttachment(context, pdf, {
+      entityType: 'transaction',
+      entityId: randomUUID(),
+      fileName: `quota-${index}.pdf`,
+      declaredMimeType: 'application/pdf',
+    })),
+  );
+
+  const successful = outcomes.filter((outcome) => outcome.status === 'fulfilled');
+  const rejected = outcomes.filter((outcome) => outcome.status === 'rejected');
+  const { total } = db.prepare('SELECT COALESCE(SUM(file_size), 0) AS total FROM attachments WHERE space_id = ?').get(space.id);
+
+  assert.equal(successful.length, 20);
+  assert.equal(rejected.length, 1);
+  assert.equal(total, 100 * 1024 * 1024);
+
+  await Promise.all(successful.map(({ value }) => fs.rm(path.join(process.cwd(), '.data', 'attachments', `${value.id}.pdf`), { force: true })));
+});
+
+test('Attachment MIME validation: assinatura válida com extensão não permitida é rejeitada', async () => {
+  const { iso, att } = await setup();
+  const user = iso.createUser({ name: 'U1', email: 'extension@test.dev' });
+  const space = iso.createSpace({ name: 'S1', ownerUserId: user.id });
+  const context = iso.resolveAuthContext({ userId: user.id, spaceId: space.id });
+  const pdf = Buffer.from('%PDF-1.7\nconteudo');
+
+  await assert.rejects(
+    () => att.uploadAttachment(context, pdf, {
+      entityType: 'transaction',
+      entityId: randomUUID(),
+      fileName: 'fatura.pdf.exe',
+      declaredMimeType: 'application/pdf',
+    }),
+    /extensão/i,
+  );
 });

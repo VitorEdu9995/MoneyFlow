@@ -186,6 +186,36 @@
       "required": ["product_id"]
     }
   },
+  "anexos_upload": {
+    "name": "anexos_upload",
+    "description": "Envia um anexo privado em base64 para uma entidade do espaço autenticado.",
+    "rules": "Permite PDF, JPEG e PNG com assinatura e extensão compatíveis; a cota é reservada atomicamente.",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "entity_type": { "type": "string" },
+        "entity_id": { "type": "string" },
+        "file_name": { "type": "string" },
+        "declared_mime_type": { "type": "string" },
+        "content_base64": { "type": "string" }
+      },
+      "required": ["entity_type", "entity_id", "file_name", "declared_mime_type", "content_base64"]
+    }
+  },
+  "anexos_download": {
+    "name": "anexos_download",
+    "description": "Baixa um anexo privado do espaço autenticado em base64.",
+    "rules": "A autorização e o filtro por espaço são aplicados no servidor; não expõe anexos de outro espaço.",
+    "readOnly": true,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "attachment_id": { "type": "string" }
+      },
+      "required": ["attachment_id"]
+    }
+  },
   "get_cashflow_sankey": {
     "name": "get_cashflow_sankey",
     "description": "Gera dados de Sankey dinâmico de fluxo de caixa: nodes (Receitas, Despesas, categorias) e links com valores em centavos e IDs de transações para explicabilidade.",

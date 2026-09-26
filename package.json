@@ -5,6 +5,6 @@
   "type": "module",
   "scripts": {
     "test": "node --test test/**/*.test.js",
-    "build": "node -e \"console.log('Build validation: checking syntax and migrations...'); import('./src/db/index.js'); import('./src/contracts/extensionToolRegistry.js'); import('./src/gateway/mcpGateway.js'); console.log('Build completed successfully.');\""
+    "build": "node -e \"console.log('Build validation: checking syntax and migrations...'); import('./src/db/index.js'); import('./src/contracts/extensionToolRegistry.js'); import('./src/gateway/mcpGateway.js'); import('./src/gateway/mcpHttpTransport.js'); console.log('Build completed successfully.');\""
   }
 }

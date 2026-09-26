@@ -14,6 +14,18 @@ const ROLE_LIMITS = {
   viewer: { maxFile: 0, maxSpace: 0 }
 };
 
+const MIME_EXTENSIONS = Object.freeze({
+  'application/pdf': ['.pdf'],
+  'image/jpeg': ['.jpg', '.jpeg'],
+  'image/png': ['.png'],
+});
+const CANONICAL_EXTENSIONS = Object.freeze({
+  'application/pdf': '.pdf',
+  'image/jpeg': '.jpg',
+  'image/png': '.png',
+});
+const MAX_FILE_NAME_BYTES = 255;
+
 export class AttachmentService {
   constructor(db, spaceIsolationService) {
     this.db = db;
@@ -33,8 +45,35 @@ export class AttachmentService {
     return 'application/octet-stream';
   }
 
+  _normalizeFileName(fileName, realMimeType) {
+    if (typeof fileName !== 'string' || fileName.length === 0) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Nome do arquivo é obrigatório.', 400);
+    }
+
+    const normalized = fileName.normalize('NFC').replaceAll('\\', '/');
+    const baseName = path.posix.basename(normalized);
+    if (baseName !== normalized || Buffer.byteLength(baseName, 'utf8') > MAX_FILE_NAME_BYTES) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Nome do arquivo é inválido ou excede 255 bytes.', 400);
+    }
+
+    const extension = path.posix.extname(baseName).toLowerCase();
+    if (!MIME_EXTENSIONS[realMimeType]?.includes(extension)) {
+      throw new AppError(
+        ErrorCodes.VALIDATION_ERROR,
+        'Extensão do arquivo não corresponde ao tipo detectado. Apenas PDF, JPEG e PNG são aceitos.',
+        400,
+      );
+    }
+
+    return `${baseName.slice(0, -extension.length)}${CANONICAL_EXTENSIONS[realMimeType]}`;
+  }
+
   async uploadAttachment(authContext, buffer, { entityType, entityId, fileName, declaredMimeType }) {
     requireAuthorization(authContext, Permissions.ATTACHMENTS_WRITE);
+
+    if (!Buffer.isBuffer(buffer)) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Conteúdo do arquivo deve ser binário.', 400);
+    }
 
     const role = authContext.membership.role;
     const limits = ROLE_LIMITS[role];
@@ -49,26 +88,34 @@ export class AttachmentService {
       throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Invalid real MIME type. Only PDF, JPEG and PNG allowed.', 400);
     }
 
-    const currentUsageRow = this.db.prepare('SELECT COALESCE(SUM(file_size), 0) as total FROM attachments WHERE space_id = ? AND deleted_at IS NULL').get(authContext.spaceId);
-    const currentUsage = currentUsageRow.total;
-
-    if (currentUsage + buffer.length > limits.maxSpace) {
-      throw new AppError(ErrorCodes.VALIDATION_ERROR, `Space quota exceeded for role ${role}.`, 400);
-    }
+    const normalizedFileName = this._normalizeFileName(fileName, realMimeType);
 
     await this._ensureUploadDir();
     const id = randomUUID();
-    const ext = path.extname(fileName);
-    const storagePath = path.join(UPLOAD_DIR, `${id}${ext}`);
+    const storagePath = path.join(UPLOAD_DIR, `${id}${CANONICAL_EXTENSIONS[realMimeType]}`);
 
-    await fs.writeFile(storagePath, buffer);
-
-    this.db.prepare(
+    // A própria inserção é a reserva de cota: a subconsulta e o INSERT pertencem
+    // à mesma instrução SQLite, portanto não há janela entre validar e reservar.
+    const reservation = this.db.prepare(
       `INSERT INTO attachments (id, space_id, entity_type, entity_id, file_name, mime_type, real_mime_type, file_size, storage_path, uploaded_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(id, authContext.spaceId, entityType, entityId, fileName, declaredMimeType, realMimeType, buffer.length, storagePath, authContext.userId);
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+       WHERE COALESCE((SELECT SUM(file_size) FROM attachments WHERE space_id = ? AND deleted_at IS NULL), 0) + ? <= ?`,
+    ).run(
+      id, authContext.spaceId, entityType, entityId, normalizedFileName, declaredMimeType, realMimeType,
+      buffer.length, storagePath, authContext.userId, authContext.spaceId, buffer.length, limits.maxSpace,
+    );
+    if (reservation.changes !== 1) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, `Space quota exceeded for role ${role}.`, 400);
+    }
 
-    const newData = redact({ id, fileName, entityType, entityId, fileSize: buffer.length });
+    try {
+      await fs.writeFile(storagePath, buffer, { flag: 'wx' });
+    } catch (error) {
+      this.db.prepare('DELETE FROM attachments WHERE id = ? AND space_id = ?').run(id, authContext.spaceId);
+      throw error;
+    }
+
+    const newData = redact({ id, fileName: normalizedFileName, entityType, entityId, fileSize: buffer.length });
 
     this.spaceIsolationService.logAudit({
       spaceId: authContext.spaceId,
@@ -79,7 +126,7 @@ export class AttachmentService {
       newData
     });
 
-    return { id, fileName, realMimeType, fileSize: buffer.length };
+    return { id, fileName: normalizedFileName, realMimeType, fileSize: buffer.length };
   }
 
   async downloadAttachment(authContext, attachmentId) {
