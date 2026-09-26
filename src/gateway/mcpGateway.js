@@ -16,6 +16,7 @@ import { AppError, ErrorCodes } from '../domain/envelope.js';
 import { Permissions, requireAuthorization } from '../domain/authorization.js';
 import { randomUUID } from 'node:crypto';
 import { logger, redact } from '../utils/logger.js';
+import { AttachmentService } from '../services/attachmentService.js';
 
 export const OPEN_FINANCE_DISABLED_TOOLS = new Set([
   'get_latest_imports',
@@ -39,10 +40,11 @@ export class McpGateway {
    * @param {import('../services/spaceIsolationService.js').SpaceIsolationService} [options.service]
    * @param {ToolContractRegistry} [options.registry]
    */
-  constructor({ service, registry } = {}) {
+  constructor({ service, registry, attachmentService } = {}) {
     this.service = service;
     this.registry = registry || new ToolContractRegistry();
     this.extensionRegistry = new ExtensionToolContractRegistry();
+    this.attachmentService = attachmentService || (service ? new AttachmentService(service.db, service) : null);
   }
 
   /**
@@ -50,7 +52,7 @@ export class McpGateway {
    * @returns {string[]}
    */
   getToolNames() {
-    return this.registry.getToolNames();
+    return [...this.registry.getToolNames(), ...this.extensionRegistry.getToolNames()].sort();
   }
 
   /**
@@ -58,7 +60,11 @@ export class McpGateway {
    * @param {string} toolName
    */
   getTool(toolName) {
-    return this.registry.getTool(toolName);
+    try {
+      return this.registry.getTool(toolName);
+    } catch {
+      return this.extensionRegistry.getTool(toolName);
+    }
   }
 
   async executeTool(toolName, args = {}, authContext = {}) {
@@ -170,8 +176,12 @@ export class McpGateway {
         isMockFixture: false,
       };
       
-      logger.info(`Tool ${toolName} completed successfully`, { result });
-      return redact(result);
+      logger.info(`Tool ${toolName} completed successfully`, {
+        result: isExtension && toolName.startsWith('anexos_')
+          ? { status: result.status, tool: toolName, attachmentId: resultData.id || args.attachment_id }
+          : result,
+      });
+      return isExtension && toolName.startsWith('anexos_') ? result : redact(result);
       
     } catch (error) {
       logger.error(`Error executing tool ${toolName}`, error);
@@ -326,9 +336,41 @@ export class McpGateway {
       update_budget: this._handleUpdateBudget,
       delete_budget: this._handleDeleteBudget,
       clone_budgets: this._handleCloneBudgets,
+
+      // 6. Anexos privados
+      anexos_upload: this._handleAttachmentUpload,
+      anexos_download: this._handleAttachmentDownload,
     };
 
     return handlers[toolName];
+  }
+
+  async _handleAttachmentUpload(args, authContext) {
+    if (!this.attachmentService) {
+      throw new AppError(ErrorCodes.INTERNAL_ERROR, 'Serviço de anexos indisponível.', 500);
+    }
+    if (typeof args.content_base64 !== 'string' || !/^[A-Za-z0-9+/]*={0,2}$/.test(args.content_base64) || args.content_base64.length % 4 !== 0) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Conteúdo base64 inválido.', 400);
+    }
+    return this.attachmentService.uploadAttachment(authContext, Buffer.from(args.content_base64, 'base64'), {
+      entityType: args.entity_type,
+      entityId: args.entity_id,
+      fileName: args.file_name,
+      declaredMimeType: args.declared_mime_type,
+    });
+  }
+
+  async _handleAttachmentDownload(args, authContext) {
+    if (!this.attachmentService) {
+      throw new AppError(ErrorCodes.INTERNAL_ERROR, 'Serviço de anexos indisponível.', 500);
+    }
+    const attachment = await this.attachmentService.downloadAttachment(authContext, args.attachment_id);
+    return {
+      content_base64: attachment.buffer.toString('base64'),
+      mime_type: attachment.mimeType,
+      file_name: attachment.fileName,
+      file_size: attachment.buffer.length,
+    };
   }
 
   // =========================================================================

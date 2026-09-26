@@ -9,7 +9,7 @@
 
 import extensionSchemas from './extension_tool_schemas.json' with { type: 'json' };
 
-export const TOTAL_EXTENSION_TOOLS = 13;
+export const TOTAL_EXTENSION_TOOLS = 15;
 
 export class ExtensionToolContractRegistry {
   constructor() {
