@@ -1,6 +1,6 @@
 /** Metas financeiras e cofrinhos (ECO-66 S4.1). Dados existentes não são alterados. */
 export const up = `
-  ALTER TABLE accounts ADD COLUMN is_piggy_bank INTEGER NOT NULL DEFAULT 0 CHECK (is_piggy_bank IN (0, 1));
+  ALTER TABLE accounts ADD COLUMN IF NOT EXISTS is_piggy_bank INTEGER NOT NULL DEFAULT 0 CHECK (is_piggy_bank IN (0, 1));
 
   CREATE TABLE IF NOT EXISTS goals (
     id TEXT PRIMARY KEY,

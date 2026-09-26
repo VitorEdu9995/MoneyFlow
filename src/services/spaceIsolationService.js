@@ -979,6 +979,9 @@ export class SpaceIsolationService {
     if (!source) {
       throw new AppError(ErrorCodes.CROSS_SPACE_REFERENCE_DENIED, 'Conta de origem pertence a outro espaço ou não existe.', 403);
     }
+    if (source.is_piggy_bank) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Use cofrinho_withdraw para sacar de uma conta-cofrinho.', 400);
+    }
 
     const destination = this.db
       .prepare('SELECT * FROM accounts WHERE id = ? AND space_id = ?')
