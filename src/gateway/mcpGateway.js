@@ -11,6 +11,7 @@
  */
 
 import { ToolContractRegistry } from '../contracts/toolRegistry.js';
+import { ExtensionToolContractRegistry } from '../contracts/extensionToolRegistry.js';
 import { AppError, ErrorCodes } from '../domain/envelope.js';
 import { Permissions, requireAuthorization } from '../domain/authorization.js';
 import { randomUUID } from 'node:crypto';
@@ -40,6 +41,7 @@ export class McpGateway {
   constructor({ service, registry } = {}) {
     this.service = service;
     this.registry = registry || new ToolContractRegistry();
+    this.extensionRegistry = new ExtensionToolContractRegistry();
   }
 
   /**
@@ -67,20 +69,28 @@ export class McpGateway {
    * @returns {Promise<object>|object} Resultado no formato compatível
    */
   async executeTool(toolName, args = {}, authContext = {}) {
-    // 1. Validação de existência da ferramenta no catálogo congelado
+    // 1. Validação de existência da ferramenta — primeiro no catálogo congelado, depois nas extensões
     let toolDefinition;
+    let isExtension = false;
     try {
       toolDefinition = this.registry.getTool(toolName);
     } catch {
-      throw new AppError(
-        ErrorCodes.NOT_FOUND,
-        `Ferramenta desconhecida: '${toolName}' não existe no catálogo de 62 ferramentas.`,
-        404,
-      );
+      // Tenta no registry de extensões (Fase 4 e futuras)
+      try {
+        toolDefinition = this.extensionRegistry.getTool(toolName);
+        isExtension = true;
+      } catch {
+        throw new AppError(
+          ErrorCodes.NOT_FOUND,
+          `Ferramenta desconhecida: '${toolName}' não existe no catálogo de ferramentas.`,
+          404,
+        );
+      }
     }
 
-    // 2. Validação estrita de argumentos contra o schema congelado
-    const validation = this.registry.validateArgs(toolName, args);
+    // 2. Validação estrita de argumentos contra o schema congelado (ou de extensão)
+    const activeRegistry = isExtension ? this.extensionRegistry : this.registry;
+    const validation = activeRegistry.validateArgs(toolName, args);
     if (!validation.valid) {
       throw new AppError(
         ErrorCodes.VALIDATION_ERROR,
@@ -100,8 +110,15 @@ export class McpGateway {
     }
 
     // 4. Se a chamada for identificada como mock fixture e não houver service ou spaceId
-    const fixture = this.registry.getFixture(toolName);
+    //    (apenas para ferramentas do catálogo congelado, não extensões)
+    let fixture = null;
+    if (!isExtension) {
+      try {
+        fixture = this.registry.getFixture(toolName);
+      } catch { /* extensão sem fixture — prossegue normalmente */ }
+    }
     const isExactFixtureCall =
+      !isExtension &&
       (!authContext || !authContext.spaceId) &&
       fixture &&
       JSON.stringify(args) === JSON.stringify(fixture.validCall.arguments);
@@ -265,6 +282,7 @@ export class McpGateway {
       find_subscriptions: this._handleFindSubscriptions,
       suggest_categories: this._handleSuggestCategories,
       load_skill: this._handleLoadSkill,
+      get_cashflow_sankey: this._handleGetCashflowSankey,
 
       // 3. Mutação de Transações e Pagamentos
       create_transaction: this._handleCreateTransaction,
@@ -619,12 +637,15 @@ export class McpGateway {
     const startDate = args.start_date || `${today.slice(0, 7)}-01`;
     const endDate = args.end_date || today;
 
-    // Caixa (paid_status = 'paid' por effective_date)
+    // Caixa (paid_status = 'paid' por effective_date ou pagamento de fatura card_payment)
     const cashRows = this.service.db
       .prepare(
         `SELECT type, SUM(amount) as total FROM transactions
-         WHERE space_id = ? AND deleted_at IS NULL AND paid_status = 'paid'
-           AND effective_date >= ? AND effective_date <= ? AND type != 'transfer'
+         WHERE space_id = ? AND deleted_at IS NULL
+           AND (paid_status = 'paid' OR type = 'card_payment')
+           AND COALESCE(effective_date, transaction_date) >= ?
+           AND COALESCE(effective_date, transaction_date) <= ?
+           AND type != 'transfer'
          GROUP BY type`,
       )
       .all(authContext.spaceId, startDate, endDate);
@@ -772,18 +793,93 @@ export class McpGateway {
 
   _handleGetCategoriesEvolution(args, authContext) {
     requireAuthorization(authContext, Permissions.REPORTS_READ);
+    const today = new Date().toISOString().slice(0, 10);
+    const threeMonthsAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const startDate = args.start_date || threeMonthsAgo;
+    const endDate = args.end_date || today;
+    const groupBy = args.group_by || 'month';
+
+    // Expressão de agrupamento temporal compatível com SQLite
+    let dateTrunc;
+    if (groupBy === 'day') {
+      dateTrunc = 'transaction_date';
+    } else if (groupBy === 'week') {
+      dateTrunc = "date(transaction_date, '-' || ((strftime('%w', transaction_date) + 6) % 7) || ' days')";
+    } else {
+      // month (padrão)
+      dateTrunc = "substr(transaction_date, 1, 7)";
+    }
+
+    const rows = this.service.db
+      .prepare(
+        `SELECT
+           c.id as category_id,
+           c.name as category_name,
+           c.kind,
+           ${dateTrunc} as period,
+           SUM(t.amount) as total
+         FROM transactions t
+         JOIN categories c ON c.id = t.category_id
+         WHERE t.space_id = ? AND t.deleted_at IS NULL
+           AND t.transaction_date >= ? AND t.transaction_date <= ?
+         GROUP BY c.id, c.name, c.kind, period
+         ORDER BY period ASC, total DESC`,
+      )
+      .all(authContext.spaceId, startDate, endDate);
+
+    // Agrupa por período para estrutura { period, categories: [...] }
+    const periodMap = new Map();
+    for (const r of rows) {
+      if (!periodMap.has(r.period)) {
+        periodMap.set(r.period, { period: r.period, categories: [] });
+      }
+      periodMap.get(r.period).categories.push({
+        categoryId: r.category_id,
+        categoryName: r.category_name,
+        kind: r.kind,
+        total: r.total,
+      });
+    }
+
     return {
-      period: { startDate: args.start_date, endDate: args.end_date },
-      groupBy: args.group_by || 'month',
-      evolution: [],
+      period: { startDate, endDate },
+      groupBy,
+      evolution: Array.from(periodMap.values()),
     };
   }
 
   _handleGetTagsReport(args, authContext) {
     requireAuthorization(authContext, Permissions.REPORTS_READ);
+    const today = new Date().toISOString().slice(0, 10);
+    const startDate = args.start_date || `${today.slice(0, 7)}-01`;
+    const endDate = args.end_date || today;
+
+    // Relatório via tabela transaction_tags (estruturada) — criada na migration 003
+    const structuredRows = this.service.db
+      .prepare(
+        `SELECT tg.id as tag_id, tg.name as tag_name, SUM(t.amount) as total, COUNT(*) as count
+         FROM transaction_tags tt
+         JOIN tags tg ON tg.id = tt.tag_id
+         JOIN transactions t ON t.id = tt.transaction_id
+         WHERE t.space_id = ? AND t.deleted_at IS NULL
+           AND t.transaction_date >= ? AND t.transaction_date <= ?
+         GROUP BY tg.id, tg.name
+         ORDER BY total DESC`,
+      )
+      .all(authContext.spaceId, startDate, endDate);
+
+    const grandTotal = structuredRows.reduce((s, r) => s + r.total, 0);
+
     return {
-      period: { startDate: args.start_date, endDate: args.end_date },
-      tags: [],
+      period: { startDate, endDate },
+      tags: structuredRows.map((r) => ({
+        tagId: r.tag_id,
+        tagName: r.tag_name,
+        total: r.total,
+        count: r.count,
+        percentage: grandTotal > 0 ? Math.round((r.total / grandTotal) * 10000) / 100 : 0,
+      })),
+      grandTotal,
     };
   }
 
@@ -850,27 +946,253 @@ export class McpGateway {
   _handleGetCashflowForecast(args, authContext) {
     requireAuthorization(authContext, Permissions.REPORTS_READ);
     const days = args.days || 30;
+    const today = new Date().toISOString().slice(0, 10);
+    const limitDate = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+    // Saldo atual de todas as contas ativas
     const balances = this._handleGetBalances({}, authContext);
+    let projectedBalance = balances.simplifiedNetWorth;
+
+    // Busca transações futuras não pagas em contas manuais (excluindo cartão: previsão não vira fato)
+    const upcoming = this.service.db
+      .prepare(
+        `SELECT type, amount, due_date
+         FROM transactions
+         WHERE space_id = ? AND deleted_at IS NULL AND paid_status = 'unpaid'
+           AND account_id IS NOT NULL
+           AND due_date >= ? AND due_date <= ?
+         ORDER BY due_date ASC`,
+      )
+      .all(authContext.spaceId, today, limitDate);
+
+    // Constrói série diária de saldo projetado
+    const dailyMap = new Map();
+    let runningBalance = balances.simplifiedNetWorth;
+    let minBalance = runningBalance;
+
+    for (const t of upcoming) {
+      const delta = t.type === 'income' ? t.amount : -t.amount;
+      const key = t.due_date;
+      if (!dailyMap.has(key)) {
+        dailyMap.set(key, { date: key, entries: [], balance: 0 });
+      }
+      dailyMap.get(key).entries.push({ type: t.type, amount: t.amount, delta });
+    }
+
+    const dailySeries = [];
+    for (const [date, day] of [...dailyMap.entries()].sort()) {
+      for (const e of day.entries) {
+        runningBalance += e.delta;
+      }
+      day.balance = runningBalance;
+      dailySeries.push(day);
+      if (runningBalance < minBalance) minBalance = runningBalance;
+    }
+
+    projectedBalance = runningBalance;
+
     return {
       days,
       currentBalance: balances.simplifiedNetWorth,
-      projectedBalance: balances.simplifiedNetWorth,
+      projectedBalance,
+      lowestProjectedBalance: minBalance,
+      upcomingCount: upcoming.length,
+      dailySeries,
     };
   }
 
   _handleFindDuplicates(args, authContext) {
     requireAuthorization(authContext, Permissions.REPORTS_READ);
-    return { month: args.month, potentialDuplicates: [] };
+    const today = new Date().toISOString().slice(0, 10);
+    const month = args.month || today.slice(0, 7);
+    const startDate = `${month}-01`;
+    const endDate = `${month}-31`;
+
+    // Busca transações do mês e detecta candidatos a duplicata:
+    // mesmo valor + descrição idêntica (normalizada) + datas com diferença ≤ 3 dias
+    const txs = this.service.db
+      .prepare(
+        `SELECT id, type, description, amount, transaction_date, account_id, credit_card_id
+         FROM transactions
+         WHERE space_id = ? AND deleted_at IS NULL
+           AND transaction_date >= ? AND transaction_date <= ?
+           AND type IN ('income', 'expense', 'card_purchase')
+         ORDER BY amount DESC, description ASC, transaction_date ASC`,
+      )
+      .all(authContext.spaceId, startDate, endDate);
+
+    const potentialDuplicates = [];
+    const seen = new Set();
+
+    for (let i = 0; i < txs.length; i++) {
+      for (let j = i + 1; j < txs.length; j++) {
+        const a = txs[i];
+        const b = txs[j];
+        if (a.amount !== b.amount || a.type !== b.type) continue;
+
+        // Descrição normalizada: lowercase, sem espaços duplos
+        const descA = a.description.toLowerCase().replace(/\s+/g, ' ').trim();
+        const descB = b.description.toLowerCase().replace(/\s+/g, ' ').trim();
+        if (descA !== descB) continue;
+
+        // Diferença de datas ≤ 3 dias
+        const dateA = new Date(a.transaction_date).getTime();
+        const dateB = new Date(b.transaction_date).getTime();
+        const diffDays = Math.abs(dateA - dateB) / (24 * 60 * 60 * 1000);
+        if (diffDays > 3) continue;
+
+        const pairKey = [a.id, b.id].sort().join('|');
+        if (seen.has(pairKey)) continue;
+        seen.add(pairKey);
+
+        potentialDuplicates.push({
+          transactionA: { id: a.id, description: a.description, amount: a.amount, date: a.transaction_date },
+          transactionB: { id: b.id, description: b.description, amount: b.amount, date: b.transaction_date },
+          diffDays: Math.round(diffDays),
+          confidence: diffDays === 0 ? 'high' : diffDays <= 1 ? 'medium' : 'low',
+        });
+      }
+    }
+
+    return { month, potentialDuplicates };
   }
 
   _handleFindInstallments(args, authContext) {
     requireAuthorization(authContext, Permissions.REPORTS_READ);
-    return { installments: [] };
+    // 1. Parcelamentos estruturados (via installment_plan_id na tabela transactions)
+    const structured = this.service.db
+      .prepare(
+        `SELECT installment_plan_id, description, COUNT(*) as total_installments,
+                SUM(amount) as total_amount, MIN(transaction_date) as first_date,
+                MAX(transaction_date) as last_date
+         FROM transactions
+         WHERE space_id = ? AND deleted_at IS NULL
+           AND installment_plan_id IS NOT NULL
+           AND (? IS NULL OR account_id = ?)
+           AND (? IS NULL OR credit_card_id = ?)
+         GROUP BY installment_plan_id, description`,
+      )
+      .all(
+        authContext.spaceId,
+        args.account_id || null, args.account_id || null,
+        args.credit_card_id || null, args.credit_card_id || null,
+      );
+
+    // 2. Heurísticos: descrições com padrão "X/Y" em card_purchase nos últimos 12 meses
+    const cutoff = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const heuristicRows = this.service.db
+      .prepare(
+        `SELECT description, amount, transaction_date, credit_card_id
+         FROM transactions
+         WHERE space_id = ? AND deleted_at IS NULL
+           AND transaction_date >= ?
+           AND type = 'card_purchase'
+           AND description GLOB '*[0-9]/[0-9]*'
+           AND (? IS NULL OR credit_card_id = ?)
+         ORDER BY description ASC, transaction_date ASC`,
+      )
+      .all(authContext.spaceId, cutoff, args.credit_card_id || null, args.credit_card_id || null);
+
+    const heuristicMap = new Map();
+    for (const r of heuristicRows) {
+      // Extrai base da descrição (remove "X/Y" do final)
+      const base = r.description.replace(/\s*\d+\/\d+\s*$/, '').trim();
+      if (!heuristicMap.has(base)) {
+        heuristicMap.set(base, []);
+      }
+      heuristicMap.get(base).push(r);
+    }
+
+    const heuristic = [];
+    for (const [base, entries] of heuristicMap.entries()) {
+      if (entries.length > 1) {
+        heuristic.push({
+          baseDescription: base,
+          detectedInstallments: entries.length,
+          totalAmount: entries.reduce((s, e) => s + e.amount, 0),
+          source: 'heuristic',
+        });
+      }
+    }
+
+    return {
+      installments: [
+        ...structured.map((s) => ({
+          planId: s.installment_plan_id,
+          description: s.description,
+          totalInstallments: s.total_installments,
+          totalAmount: s.total_amount,
+          firstDate: s.first_date,
+          lastDate: s.last_date,
+          source: 'structured',
+        })),
+        ...heuristic,
+      ],
+    };
   }
 
   _handleFindSubscriptions(args, authContext) {
     requireAuthorization(authContext, Permissions.REPORTS_READ);
-    return { subscriptions: [] };
+    const cutoff = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+    // 1. Recorrências cadastradas explicitamente
+    const registered = this.service.db
+      .prepare(
+        `SELECT id, description, type, amount, frequency, status, start_date
+         FROM recurrences
+         WHERE space_id = ? AND status = 'active'`,
+      )
+      .all(authContext.spaceId);
+
+    // 2. Heurística: mesma descrição + valor estável (desvio < 5%) repetido ≥ 2 vezes em meses distintos
+    const heuristicRows = this.service.db
+      .prepare(
+        `SELECT description,
+                COUNT(*) as occurrences,
+                AVG(amount) as avg_amount,
+                MIN(amount) as min_amount,
+                MAX(amount) as max_amount,
+                MIN(transaction_date) as first_date,
+                MAX(transaction_date) as last_date,
+                COUNT(DISTINCT substr(transaction_date, 1, 7)) as distinct_months
+         FROM transactions
+         WHERE space_id = ? AND deleted_at IS NULL
+           AND transaction_date >= ?
+           AND type IN ('expense', 'card_purchase')
+         GROUP BY description
+         HAVING distinct_months >= 2
+           AND (CAST(max_amount - min_amount AS REAL) / CAST(avg_amount AS REAL)) < 0.05
+         ORDER BY occurrences DESC, avg_amount DESC`,
+      )
+      .all(authContext.spaceId, cutoff);
+
+    const registeredDescriptions = new Set(registered.map((r) => r.description.toLowerCase()));
+
+    const subscriptions = [
+      ...registered.map((r) => ({
+        description: r.description,
+        amount: r.amount,
+        frequency: r.frequency,
+        status: r.status,
+        startDate: r.start_date,
+        source: 'registered',
+        valueStability: 'exact',
+      })),
+      ...heuristicRows
+        .filter((r) => !registeredDescriptions.has(r.description.toLowerCase()))
+        .map((r) => ({
+          description: r.description,
+          estimatedAmount: Math.round(r.avg_amount),
+          occurrences: r.occurrences,
+          distinctMonths: r.distinct_months,
+          firstDate: r.first_date,
+          lastDate: r.last_date,
+          source: 'heuristic',
+          valueStability: r.max_amount === r.min_amount ? 'exact' : 'approximate',
+        })),
+    ];
+
+    return { subscriptions };
   }
 
   _handleSuggestCategories(args, authContext) {
@@ -889,6 +1211,17 @@ export class McpGateway {
       skillName: args.skill_name,
       guide: `Guia de uso de tema Organizze para: ${args.skill_name}`,
     };
+  }
+
+  _handleGetCashflowSankey(args, authContext) {
+    requireAuthorization(authContext, Permissions.REPORTS_READ);
+    return this.service.getCashflowSankey(authContext, {
+      startDate: args.start_date || null,
+      endDate: args.end_date || null,
+      basis: args.basis || 'accrual',
+      accountId: args.account_id || null,
+      categoryId: args.category_id || null,
+    });
   }
 
   // =========================================================================

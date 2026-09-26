@@ -185,5 +185,22 @@
       },
       "required": ["product_id"]
     }
+  },
+  "get_cashflow_sankey": {
+    "name": "get_cashflow_sankey",
+    "description": "Gera dados de Sankey dinâmico de fluxo de caixa: nodes (Receitas, Despesas, categorias) e links com valores em centavos e IDs de transações para explicabilidade.",
+    "rules": "Transferências internas não inflam entradas/saídas. Previsões não viram fatos. Base 'accrual' usa transaction_date (competência); 'cash' usa effective_date + paid_status=paid (caixa). Padrão: mês atual, base accrual.",
+    "readOnly": true,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "start_date": { "type": "string", "description": "Data de início (YYYY-MM-DD)" },
+        "end_date": { "type": "string", "description": "Data de fim (YYYY-MM-DD)" },
+        "basis": { "type": "string", "enum": ["cash", "accrual"], "default": "accrual", "description": "Base de cálculo" },
+        "account_id": { "type": "string", "description": "Filtrar por conta específica" },
+        "category_id": { "type": "string", "description": "Filtrar por categoria específica" }
+      },
+      "required": []
+    }
   }
 }
