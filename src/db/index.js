@@ -60,7 +60,11 @@ export function runMigrations(db) {
     if (!appliedSet.has(mig.id)) {
       db.exec('BEGIN TRANSACTION;');
       try {
-        db.exec(mig.module.up);
+        if (typeof mig.module.up === 'function') {
+          mig.module.up(db);
+        } else {
+          db.exec(mig.module.up);
+        }
         db.prepare('INSERT INTO _migrations (id) VALUES (?)').run(mig.id);
         db.exec('COMMIT;');
         newlyApplied.push(mig.id);

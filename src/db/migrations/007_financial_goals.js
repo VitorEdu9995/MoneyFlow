@@ -1,7 +1,19 @@
 /** Metas financeiras e cofrinhos (ECO-66 S4.1). Dados existentes não são alterados. */
-export const up = `
-  ALTER TABLE accounts ADD COLUMN IF NOT EXISTS is_piggy_bank INTEGER NOT NULL DEFAULT 0 CHECK (is_piggy_bank IN (0, 1));
 
+/**
+ * up aceita db como argumento para executar o ALTER TABLE condicionalmente,
+ * pois SQLite não suporta ADD COLUMN IF NOT EXISTS.
+ * @param {import('node:sqlite').DatabaseSync} db
+ */
+export function up(db) {
+  // Adiciona is_piggy_bank apenas se a coluna ainda não existir (idempotente)
+  const cols = db.prepare('PRAGMA table_info(accounts)').all();
+  const hasPiggy = cols.some((c) => c.name === 'is_piggy_bank');
+  if (!hasPiggy) {
+    db.exec(`ALTER TABLE accounts ADD COLUMN is_piggy_bank INTEGER NOT NULL DEFAULT 0 CHECK (is_piggy_bank IN (0, 1));`);
+  }
+
+  db.exec(`
   CREATE TABLE IF NOT EXISTS goals (
     id TEXT PRIMARY KEY,
     space_id TEXT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
@@ -28,10 +40,12 @@ export const up = `
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
   CREATE INDEX IF NOT EXISTS idx_piggy_banks_space_goal ON piggy_banks(space_id, goal_id);
-`;
+  `);
+}
 
 export const down = `
   DROP TABLE IF EXISTS piggy_banks;
   DROP TABLE IF EXISTS goals;
-  -- SQLite não suporta DROP COLUMN portável; rollback estrutural preserva a coluna vazia.
+  -- is_piggy_bank preservada (SQLite não suporta DROP COLUMN portável);
+  -- re-aplicar é seguro via PRAGMA table_info check no up().
 `;
