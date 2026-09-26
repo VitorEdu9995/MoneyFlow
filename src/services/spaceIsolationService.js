@@ -959,7 +959,7 @@ export class SpaceIsolationService {
 
   createTransfer(
     authContext,
-    { id = randomUUID(), sourceAccountId, destinationAccountId, amount, transferDate, description = 'Transferência entre contas' },
+    { id = randomUUID(), sourceAccountId, destinationAccountId, amount, transferDate, description = 'Transferência entre contas', _allowPiggy = false },
   ) {
     requireAuthorization(authContext, Permissions.TRANSACTIONS_WRITE);
 
@@ -979,7 +979,7 @@ export class SpaceIsolationService {
     if (!source) {
       throw new AppError(ErrorCodes.CROSS_SPACE_REFERENCE_DENIED, 'Conta de origem pertence a outro espaço ou não existe.', 403);
     }
-    if (source.is_piggy_bank) {
+    if (!_allowPiggy && source.is_piggy_bank) {
       throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Use cofrinho_withdraw para sacar de uma conta-cofrinho.', 400);
     }
 
@@ -988,6 +988,9 @@ export class SpaceIsolationService {
       .get(destinationAccountId, authContext.spaceId);
     if (!destination) {
       throw new AppError(ErrorCodes.CROSS_SPACE_REFERENCE_DENIED, 'Conta de destino pertence a outro espaço ou não existe.', 403);
+    }
+    if (!_allowPiggy && destination.is_piggy_bank) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Use cofrinho_deposit para depositar em uma conta-cofrinho.', 400);
     }
 
     if (source.currency !== destination.currency) {
@@ -2979,7 +2982,7 @@ export class SpaceIsolationService {
     if (direction === 'deposit' && other.current_balance < amount) throw new AppError(ErrorCodes.INSUFFICIENT_FUNDS, 'Saldo insuficiente na conta de origem.', 409);
     const sourceAccountId = direction === 'deposit' ? other.id : bank.account_id;
     const destinationAccountId = direction === 'deposit' ? bank.account_id : other.id;
-    const transfer = this.createTransfer(authContext, { sourceAccountId, destinationAccountId, amount, transferDate: date, description: description || (direction === 'deposit' ? `Aporte em ${goal.name}` : `Saque de ${goal.name}`) });
+    const transfer = this.createTransfer(authContext, { sourceAccountId, destinationAccountId, amount, transferDate: date, description: description || (direction === 'deposit' ? `Aporte em ${goal.name}` : `Saque de ${goal.name}`), _allowPiggy: true });
     this.logAudit({ spaceId: authContext.spaceId, actorUserId: authContext.userId, action: `piggy_bank.${direction}`, entityType: 'piggy_banks', entityId: bank.id, newData: { goalId, amount, transferId: transfer.id } });
     return { transfer, goal: this.getGoalProgress(authContext, goalId) };
   }
