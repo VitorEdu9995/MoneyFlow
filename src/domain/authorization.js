@@ -48,6 +48,10 @@ export const Permissions = Object.freeze({
   ATTRIBUTE_DEFINITIONS_MANAGE: 'attributes:manage',
   PRODUCTS_MERGE: 'products:merge',
   LOCATIONS_MERGE: 'locations:merge',
+
+  // Anexos privados
+  ATTACHMENTS_WRITE: 'attachments:write',
+  ATTACHMENTS_READ: 'attachments:read',
 });
 
 const ROLE_PERMISSIONS = {
@@ -73,6 +77,8 @@ const ROLE_PERMISSIONS = {
     Permissions.ATTRIBUTE_DEFINITIONS_MANAGE,
     Permissions.PRODUCTS_MERGE,
     Permissions.LOCATIONS_MERGE,
+    Permissions.ATTACHMENTS_WRITE,
+    Permissions.ATTACHMENTS_READ,
   ],
   [Roles.ADMIN]: [
     Permissions.SPACE_READ,
@@ -95,6 +101,8 @@ const ROLE_PERMISSIONS = {
     Permissions.ATTRIBUTE_DEFINITIONS_MANAGE,
     Permissions.PRODUCTS_MERGE,
     Permissions.LOCATIONS_MERGE,
+    Permissions.ATTACHMENTS_WRITE,
+    Permissions.ATTACHMENTS_READ,
   ],
   [Roles.EDITOR]: [
     Permissions.SPACE_READ,
@@ -111,6 +119,8 @@ const ROLE_PERMISSIONS = {
     Permissions.LOCATIONS_WRITE,
     Permissions.PRODUCTS_WRITE,
     Permissions.REFUNDS_WRITE,
+    Permissions.ATTACHMENTS_WRITE,
+    Permissions.ATTACHMENTS_READ,
   ],
   [Roles.VIEWER]: [
     Permissions.SPACE_READ,
@@ -118,6 +128,7 @@ const ROLE_PERMISSIONS = {
     Permissions.FINANCE_READ,
     Permissions.REPORTS_READ,
     Permissions.PURCHASES_READ,
+    Permissions.ATTACHMENTS_READ,
   ],
 };
 
