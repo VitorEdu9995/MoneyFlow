@@ -13,6 +13,7 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { AppError, ErrorCodes } from '../domain/envelope.js';
 import { Roles, requireAuthorization, Permissions } from '../domain/authorization.js';
+import { logger } from '../utils/logger.js';
 
 // =========================================================================
 // UTILITÁRIOS DE DATA (FASE 2 - ECO-62)
@@ -440,6 +441,20 @@ export class SpaceIsolationService {
         ipAddress,
         userAgent,
       );
+      
+    logger.info(`Audit Log: ${action} on ${entityType}`, {
+      auditId: id,
+      spaceId,
+      actorUserId,
+      action,
+      entityType,
+      entityId,
+      oldData,
+      newData,
+      ipAddress,
+      userAgent
+    });
+      
     return id;
   }
 
