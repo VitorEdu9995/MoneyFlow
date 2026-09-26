@@ -13,6 +13,7 @@ test('Migrations estruturais sobem em banco vazio com integridade e sem dados au
     '003_financial_core_phase2',
     '004_import_real_mvp_format',
     '005_audit_log_append_only',
+    '006_attachments',
   ]);
 
   // Nenhuma tabela possui dados inseridos automaticamente
@@ -24,6 +25,7 @@ test('Migrations estruturais sobem em banco vazio com integridade e sem dados au
   const tags = db.prepare('SELECT COUNT(*) as count FROM tags').get().count;
   const transfers = db.prepare('SELECT COUNT(*) as count FROM transfers').get().count;
   const importBatches = db.prepare('SELECT COUNT(*) as count FROM import_batches').get().count;
+  const attachments = db.prepare('SELECT COUNT(*) as count FROM attachments').get().count;
 
   assert.equal(users, 0);
   assert.equal(spaces, 0);
@@ -33,6 +35,7 @@ test('Migrations estruturais sobem em banco vazio com integridade e sem dados au
   assert.equal(tags, 0);
   assert.equal(transfers, 0);
   assert.equal(importBatches, 0);
+  assert.equal(attachments, 0);
 
   // Executar novamente não reaplica (idempotente)
   const reapplied = runMigrations(db);
@@ -43,7 +46,8 @@ test('Migrations são reversíveis via rollback explícito', () => {
   const db = createDatabase(':memory:');
   runMigrations(db);
 
-  // Reversão explícita na ordem de dependência (005, 004, 003, 002 e depois 001)
+  // Reversão explícita na ordem de dependência (006, 005, 004, 003, 002 e depois 001)
+  rollbackMigration(db, '006_attachments');
   rollbackMigration(db, '005_audit_log_append_only');
   rollbackMigration(db, '004_import_real_mvp_format');
   rollbackMigration(db, '003_financial_core_phase2');
@@ -63,6 +67,7 @@ test('Migrations são reversíveis via rollback explícito', () => {
   assert.equal(tables.includes('tags'), false);
   assert.equal(tables.includes('transfers'), false);
   assert.equal(tables.includes('import_batches'), false);
+  assert.equal(tables.includes('attachments'), false);
 });
 
 test('Migration 004 amplia import_batches (imported_cards/imported_payments) e import_entities (entity_type credit_cards)', () => {

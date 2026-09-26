@@ -4,20 +4,21 @@ import assert from 'node:assert/strict';
 import { McpGateway, OPEN_FINANCE_DISABLED_TOOLS } from '../../src/gateway/mcpGateway.js';
 import { ToolContractRegistry, TOTAL_EXPECTED_TOOLS } from '../../src/contracts/toolRegistry.js';
 
-test('McpGateway Contract: 62/62 ferramentas registradas e íntegras', () => {
+test('McpGateway Contract: catálogo congelado e extensões de anexos coexistem', () => {
   const registry = new ToolContractRegistry();
   const gateway = new McpGateway({ registry });
 
-  const tools = gateway.getToolNames();
-  assert.equal(tools.length, TOTAL_EXPECTED_TOOLS);
-  assert.equal(tools.length, 62);
+  assert.equal(registry.getToolNames().length, TOTAL_EXPECTED_TOOLS);
+  assert.equal(registry.getToolNames().length, 62);
+  assert.ok(gateway.getToolNames().includes('anexos_upload'));
+  assert.ok(gateway.getToolNames().includes('anexos_download'));
 });
 
 test('McpGateway Contract: 62/62 fixtures de contrato passam com retorno compatível', async () => {
   const registry = new ToolContractRegistry();
   const gateway = new McpGateway({ registry });
 
-  const toolNames = gateway.getToolNames();
+  const toolNames = registry.getToolNames();
 
   for (const name of toolNames) {
     const fixture = registry.getFixture(name);

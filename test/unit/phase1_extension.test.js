@@ -234,17 +234,19 @@ test('Extensão 5: Devolução/Estorno de Item Vinculado com Validação de Teto
   assert.equal(summary.netAmountAfterRefunds, 10000); // Sobrou 10000
 });
 
-test('Extensão 6: Validação e Coexistência de Registries (62 Congelados + 13 Extensões)', () => {
+test('Extensão 6: Validação e Coexistência de Registries (62 Congelados + 15 Extensões)', () => {
   const frozen = new ToolContractRegistry();
   const extension = new ExtensionToolContractRegistry();
 
   // 62 continuam estritamente intactos
   assert.equal(frozen.getToolNames().length, 62);
 
-  // Extensões adicionam 13 ferramentas (12 originais + get_cashflow_sankey da Fase 4)
-  assert.equal(extension.getToolNames().length, 13);
+  // Extensões adicionam 15 ferramentas (incluindo upload/download privado de anexos)
+  assert.equal(extension.getToolNames().length, 15);
   assert.equal(extension.getToolNames().includes('create_purchase_with_items'), true);
   assert.equal(extension.getToolNames().includes('create_attribute_definition'), true);
   assert.equal(extension.getToolNames().includes('get_price_history'), true);
   assert.equal(extension.getToolNames().includes('get_cashflow_sankey'), true);
+  assert.equal(extension.getToolNames().includes('anexos_upload'), true);
+  assert.equal(extension.getToolNames().includes('anexos_download'), true);
 });
