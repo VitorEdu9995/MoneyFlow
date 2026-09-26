@@ -216,6 +216,34 @@
       "required": ["attachment_id"]
     }
   },
+  "metas_create": {
+    "name": "metas_create", "description": "Cria meta financeira, com cofrinho exclusivo quando a meta for de poupança.", "readOnly": false,
+    "inputSchema": { "type": "object", "properties": { "name": {"type":"string"}, "goal_type": {"type":"string","enum":["savings","spending"]}, "target_amount": {"type":"number"}, "category_id": {"type":"string"}, "start_date": {"type":"string"}, "deadline": {"type":"string"}, "recurrence_rule": {"type":"string"} }, "required": ["name","goal_type","target_amount","start_date","deadline"] }
+  },
+  "metas_update": {
+    "name": "metas_update", "description": "Atualiza campos permitidos de uma meta do espaço autenticado.", "readOnly": false,
+    "inputSchema": { "type": "object", "properties": { "id": {"type":"string"}, "name": {"type":"string"}, "target_amount": {"type":"number"}, "category_id": {"type":"string"}, "start_date": {"type":"string"}, "deadline": {"type":"string"}, "recurrence_rule": {"type":"string"} }, "required": ["id"] }
+  },
+  "metas_delete": {
+    "name": "metas_delete", "description": "Exclui logicamente uma meta sem apagar movimentações do cofrinho.", "readOnly": false,
+    "inputSchema": { "type": "object", "properties": { "id": {"type":"string"} }, "required": ["id"] }
+  },
+  "list_metas": {
+    "name": "list_metas", "description": "Lista metas do espaço autenticado com paginação e progresso.", "readOnly": true,
+    "inputSchema": { "type": "object", "properties": { "limit": {"type":"integer"}, "offset": {"type":"integer"}, "timezone": {"type":"string"} }, "required": [] }
+  },
+  "get_goal_progress": {
+    "name": "get_goal_progress", "description": "Obtém o progresso calculado de uma meta do espaço autenticado.", "readOnly": true,
+    "inputSchema": { "type": "object", "properties": { "id": {"type":"string"} }, "required": ["id"] }
+  },
+  "cofrinho_deposit": {
+    "name": "cofrinho_deposit", "description": "Aporta recursos na conta-cofrinho através de transferência atômica auditada.", "readOnly": false,
+    "inputSchema": { "type": "object", "properties": { "goal_id": {"type":"string"}, "source_account_id": {"type":"string"}, "amount": {"type":"number"}, "date": {"type":"string"}, "description": {"type":"string"} }, "required": ["goal_id","source_account_id","amount","date"] }
+  },
+  "cofrinho_withdraw": {
+    "name": "cofrinho_withdraw", "description": "Retira recursos do cofrinho para uma conta do mesmo espaço, impedindo saldo negativo.", "readOnly": false,
+    "inputSchema": { "type": "object", "properties": { "goal_id": {"type":"string"}, "destination_account_id": {"type":"string"}, "amount": {"type":"number"}, "date": {"type":"string"}, "description": {"type":"string"} }, "required": ["goal_id","destination_account_id","amount","date"] }
+  },
   "get_cashflow_sankey": {
     "name": "get_cashflow_sankey",
     "description": "Gera dados de Sankey dinâmico de fluxo de caixa: nodes (Receitas, Despesas, categorias) e links com valores em centavos e IDs de transações para explicabilidade.",

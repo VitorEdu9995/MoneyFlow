@@ -2874,6 +2874,114 @@ export class SpaceIsolationService {
   }
 
   // =========================================================================
+  // METAS FINANCEIRAS E COFRINHOS (ECO-66 S4.1)
+  // =========================================================================
+
+  _getGoal(authContext, goalId) {
+    const goal = this.db.prepare('SELECT * FROM goals WHERE id = ? AND space_id = ? AND deleted_at IS NULL').get(goalId, authContext.spaceId);
+    if (!goal) throw new AppError(ErrorCodes.NOT_FOUND, 'Meta não encontrada.', 404);
+    return goal;
+  }
+
+  _assertGoalCategory(spaceId, categoryId) {
+    const category = this.db.prepare("SELECT id FROM categories WHERE id = ? AND space_id = ? AND kind = 'expense' AND archived_at IS NULL").get(categoryId, spaceId);
+    if (!category) throw new AppError(ErrorCodes.CROSS_SPACE_REFERENCE_DENIED, 'Categoria de despesa não encontrada no espaço.', 403);
+  }
+
+  createGoal(authContext, { name, goalType, targetAmount, categoryId = null, startDate, deadline, recurrenceRule = null }) {
+    requireAuthorization(authContext, Permissions.GOALS_WRITE);
+    if (!name || !['savings', 'spending'].includes(goalType) || !(targetAmount > 0) || !startDate || !deadline || deadline < startDate) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Dados da meta inválidos.', 400);
+    }
+    if (goalType === 'spending' && !categoryId) throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Meta de gasto exige category_id.', 400);
+    if (categoryId) this._assertGoalCategory(authContext.spaceId, categoryId);
+
+    return this._runAtomic(() => {
+      const id = randomUUID();
+      this.db.prepare(`INSERT INTO goals (id, space_id, name, goal_type, target_amount, category_id, start_date, deadline, recurrence_rule) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(id, authContext.spaceId, name, goalType, targetAmount, categoryId, startDate, deadline, recurrenceRule);
+      let piggyBank = null;
+      if (goalType === 'savings') {
+        const accountId = randomUUID();
+        this.db.prepare(`INSERT INTO accounts (id, space_id, name, account_type, opening_balance, current_balance, is_piggy_bank) VALUES (?, ?, ?, 'savings', 0, 0, 1)`)
+          .run(accountId, authContext.spaceId, `Cofrinho: ${name}`);
+        const piggyId = randomUUID();
+        this.db.prepare('INSERT INTO piggy_banks (id, space_id, goal_id, account_id) VALUES (?, ?, ?, ?)').run(piggyId, authContext.spaceId, id, accountId);
+        piggyBank = { id: piggyId, accountId };
+      }
+      this.logAudit({ spaceId: authContext.spaceId, actorUserId: authContext.userId, action: 'goal.create', entityType: 'goals', entityId: id, newData: { name, goalType, targetAmount, categoryId, piggyBank } });
+      return this.getGoalProgress(authContext, id);
+    });
+  }
+
+  updateGoal(authContext, goalId, updates = {}) {
+    requireAuthorization(authContext, Permissions.GOALS_WRITE);
+    const existing = this._getGoal(authContext, goalId);
+    const targetAmount = updates.targetAmount ?? existing.target_amount;
+    const startDate = updates.startDate ?? existing.start_date;
+    const deadline = updates.deadline ?? existing.deadline;
+    const categoryId = updates.categoryId ?? existing.category_id;
+    if (!(targetAmount > 0) || deadline < startDate || (existing.goal_type === 'spending' && !categoryId)) throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Atualização de meta inválida.', 400);
+    if (categoryId) this._assertGoalCategory(authContext.spaceId, categoryId);
+    const fields = { name: updates.name ?? existing.name, target_amount: targetAmount, category_id: categoryId, start_date: startDate, deadline, recurrence_rule: updates.recurrenceRule ?? existing.recurrence_rule };
+    this._runAtomic(() => {
+      this.db.prepare("UPDATE goals SET name = ?, target_amount = ?, category_id = ?, start_date = ?, deadline = ?, recurrence_rule = ?, updated_at = datetime('now') WHERE id = ? AND space_id = ?")
+        .run(fields.name, fields.target_amount, fields.category_id, fields.start_date, fields.deadline, fields.recurrence_rule, goalId, authContext.spaceId);
+      this.logAudit({ spaceId: authContext.spaceId, actorUserId: authContext.userId, action: 'goal.update', entityType: 'goals', entityId: goalId, oldData: existing, newData: fields });
+    });
+    return this.getGoalProgress(authContext, goalId);
+  }
+
+  deleteGoal(authContext, goalId) {
+    requireAuthorization(authContext, Permissions.GOALS_WRITE);
+    const existing = this._getGoal(authContext, goalId);
+    this._runAtomic(() => {
+      this.db.prepare("UPDATE goals SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND space_id = ?").run(goalId, authContext.spaceId);
+      this.logAudit({ spaceId: authContext.spaceId, actorUserId: authContext.userId, action: 'goal.delete', entityType: 'goals', entityId: goalId, oldData: existing });
+    });
+    return { deleted: true, id: goalId };
+  }
+
+  getGoalProgress(authContext, goalId) {
+    requireAuthorization(authContext, Permissions.FINANCE_READ);
+    const goal = this._getGoal(authContext, goalId);
+    let currentAmount = 0;
+    let piggyBank = null;
+    if (goal.goal_type === 'savings') {
+      piggyBank = this.db.prepare(`SELECT pb.id, pb.account_id, a.current_balance FROM piggy_banks pb JOIN accounts a ON a.id = pb.account_id WHERE pb.goal_id = ? AND pb.space_id = ?`).get(goal.id, authContext.spaceId);
+      currentAmount = piggyBank?.current_balance ?? 0;
+    } else {
+      currentAmount = this.db.prepare(`SELECT COALESCE(SUM(amount), 0) AS total FROM transactions WHERE space_id = ? AND category_id = ? AND type IN ('expense', 'card_purchase') AND deleted_at IS NULL AND transaction_date >= ? AND transaction_date <= ?`).get(authContext.spaceId, goal.category_id, goal.start_date, goal.deadline).total;
+    }
+    return { ...goal, current_amount: currentAmount, progress_percent: Math.min(100, Math.round((currentAmount / goal.target_amount) * 10000) / 100), piggy_bank: piggyBank ? { id: piggyBank.id, account_id: piggyBank.account_id, balance: piggyBank.current_balance } : null };
+  }
+
+  listGoals(authContext, { limit = 50, offset = 0 } = {}) {
+    requireAuthorization(authContext, Permissions.FINANCE_READ);
+    const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 100);
+    const safeOffset = Math.max(Number(offset) || 0, 0);
+    const ids = this.db.prepare('SELECT id FROM goals WHERE space_id = ? AND deleted_at IS NULL ORDER BY deadline ASC, created_at DESC LIMIT ? OFFSET ?').all(authContext.spaceId, safeLimit, safeOffset);
+    return ids.map(({ id }) => this.getGoalProgress(authContext, id));
+  }
+
+  movePiggyBankFunds(authContext, { goalId, otherAccountId, amount, date, direction, description }) {
+    requireAuthorization(authContext, Permissions.GOALS_WRITE);
+    if (!(amount > 0)) throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Valor do cofrinho deve ser positivo.', 400);
+    const goal = this._getGoal(authContext, goalId);
+    if (goal.goal_type !== 'savings') throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Apenas metas de poupança possuem cofrinho.', 400);
+    const bank = this.db.prepare('SELECT pb.id, pb.account_id, a.current_balance FROM piggy_banks pb JOIN accounts a ON a.id = pb.account_id WHERE pb.goal_id = ? AND pb.space_id = ?').get(goalId, authContext.spaceId);
+    const other = this.db.prepare('SELECT id, is_piggy_bank, current_balance FROM accounts WHERE id = ? AND space_id = ? AND archived_at IS NULL').get(otherAccountId, authContext.spaceId);
+    if (!other || other.is_piggy_bank) throw new AppError(ErrorCodes.CROSS_SPACE_REFERENCE_DENIED, 'Conta de origem ou destino inválida.', 403);
+    if (direction === 'withdraw' && bank.current_balance < amount) throw new AppError(ErrorCodes.INSUFFICIENT_FUNDS, 'Saldo insuficiente no cofrinho.', 409);
+    if (direction === 'deposit' && other.current_balance < amount) throw new AppError(ErrorCodes.INSUFFICIENT_FUNDS, 'Saldo insuficiente na conta de origem.', 409);
+    const sourceAccountId = direction === 'deposit' ? other.id : bank.account_id;
+    const destinationAccountId = direction === 'deposit' ? bank.account_id : other.id;
+    const transfer = this.createTransfer(authContext, { sourceAccountId, destinationAccountId, amount, transferDate: date, description: description || (direction === 'deposit' ? `Aporte em ${goal.name}` : `Saque de ${goal.name}`) });
+    this.logAudit({ spaceId: authContext.spaceId, actorUserId: authContext.userId, action: `piggy_bank.${direction}`, entityType: 'piggy_banks', entityId: bank.id, newData: { goalId, amount, transferId: transfer.id } });
+    return { transfer, goal: this.getGoalProgress(authContext, goalId) };
+  }
+
+  // =========================================================================
   // CASHFLOW SANKEY DINÂMICO (ECO-64)
   //
   // Gera nodes e links para visualização Sankey do fluxo de caixa de um período.
@@ -2940,11 +3048,13 @@ export class SpaceIsolationService {
                 c.kind as category_kind,
                 ${dateField} as ref_date
          FROM transactions t
+         LEFT JOIN accounts a ON a.id = t.account_id
          LEFT JOIN categories c ON c.id = t.category_id
          WHERE t.space_id = ?
            AND t.deleted_at IS NULL
            AND ${dateField} >= ? AND ${dateField} <= ?
            AND t.type NOT IN ('transfer')
+           AND COALESCE(a.is_piggy_bank, 0) = 0
            ${paidFilter}
            ${extraFilter}
          ORDER BY t.type, category_name`,

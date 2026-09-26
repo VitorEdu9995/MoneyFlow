@@ -14,6 +14,7 @@ import * as financialCorePhase2 from './migrations/003_financial_core_phase2.js'
 import * as importRealMvpFormat from './migrations/004_import_real_mvp_format.js';
 import * as auditLogAppendOnly from './migrations/005_audit_log_append_only.js';
 import * as attachments from './migrations/006_attachments.js';
+import * as financialGoals from './migrations/007_financial_goals.js';
 
 export const MIGRATIONS = [
   { id: '001_initial_schema', module: initialSchema },
@@ -22,6 +23,7 @@ export const MIGRATIONS = [
   { id: '004_import_real_mvp_format', module: importRealMvpFormat },
   { id: '005_audit_log_append_only', module: auditLogAppendOnly },
   { id: '006_attachments', module: attachments },
+  { id: '007_financial_goals', module: financialGoals },
 ];
 
 /**
