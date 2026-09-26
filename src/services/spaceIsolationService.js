@@ -1,3 +1,4 @@
+import { withAuditInterceptor } from './auditInterceptor.js';
 /**
  * Repositório e serviço de isolamento multi-espaço, membros, sessões e auditoria (ECO-61).
  *
@@ -90,7 +91,7 @@ export function computeInvoiceCycle(referenceDate, closingDay, dueDay) {
   return { cycleStart, cycleEnd, closingDate, dueDate };
 }
 
-export class SpaceIsolationService {
+class SpaceIsolationServiceImpl {
   /**
    * @param {import('node:sqlite').DatabaseSync} db
    */
@@ -234,14 +235,6 @@ export class SpaceIsolationService {
     return this._runAtomic(() => {
       spaceInsert.run(id, name, ownerUserId, currency, timezone);
       memberInsert.run(randomUUID(), id, ownerUserId, Roles.OWNER, 'active');
-      this.logAudit({
-        spaceId: id,
-        actorUserId: ownerUserId,
-        action: 'space.create',
-        entityType: 'spaces',
-        entityId: id,
-        newData: { id, name, ownerUserId, currency, timezone },
-      });
       return this.getSpace(id);
     });
   }
@@ -337,15 +330,6 @@ export class SpaceIsolationService {
         .run(memberId, authContext.spaceId, targetUserId, role, 'active', authContext.userId);
     }
 
-    this.logAudit({
-      spaceId: authContext.spaceId,
-      actorUserId: authContext.userId,
-      action: existing ? 'member.update_role' : 'member.add',
-      entityType: 'space_members',
-      entityId: memberId,
-      oldData: existing,
-      newData: { targetUserId, role, status: 'active' },
-    });
 
     return this.getMembership(authContext.spaceId, targetUserId);
   }
@@ -394,15 +378,6 @@ export class SpaceIsolationService {
       )
       .run(targetMembership.id);
 
-    this.logAudit({
-      spaceId: authContext.spaceId,
-      actorUserId: authContext.userId,
-      action: 'member.revoke',
-      entityType: 'space_members',
-      entityId: targetMembership.id,
-      oldData: targetMembership,
-      newData: { status: 'revoked' },
-    });
 
     return { ok: true, status: 'revoked' };
   }
@@ -469,14 +444,6 @@ export class SpaceIsolationService {
       )
       .run(id, authContext.spaceId, name, openingBalance, openingBalance, accountType, currency);
 
-    this.logAudit({
-      spaceId: authContext.spaceId,
-      actorUserId: authContext.userId,
-      action: 'account.create',
-      entityType: 'accounts',
-      entityId: id,
-      newData: { id, name, openingBalance, accountType, currency },
-    });
 
     return this.getAccount(authContext, id);
   }
@@ -533,14 +500,6 @@ export class SpaceIsolationService {
       )
       .run(id, authContext.spaceId, name, closingDay, dueDay, creditLimit, paymentAccountId, brand);
 
-    this.logAudit({
-      spaceId: authContext.spaceId,
-      actorUserId: authContext.userId,
-      action: 'credit_card.create',
-      entityType: 'credit_cards',
-      entityId: id,
-      newData: { id, name, closingDay, dueDay, creditLimit, paymentAccountId },
-    });
 
     return this.getCreditCard(authContext, id);
   }
@@ -689,14 +648,6 @@ export class SpaceIsolationService {
       // SAVEPOINT), nunca um passo solto que possa ficar dessincronizado.
       this._recalculateAccountBalance(authContext.spaceId, accountId);
 
-      this.logAudit({
-        spaceId: authContext.spaceId,
-        actorUserId: authContext.userId,
-        action: 'transaction.create',
-        entityType: 'transactions',
-        entityId: id,
-        newData: { id, type, description, amount, transactionDate },
-      });
 
       return this.getTransaction(authContext, id);
     });
@@ -762,15 +713,6 @@ export class SpaceIsolationService {
       // caso a caso quais campos "sujam" o saldo.
       this._recalculateAccountBalance(authContext.spaceId, existing.account_id);
 
-      this.logAudit({
-        spaceId: authContext.spaceId,
-        actorUserId: authContext.userId,
-        action: 'transaction.update',
-        entityType: 'transactions',
-        entityId: transactionId,
-        oldData: existing,
-        newData: updates,
-      });
 
       return this.getTransaction(authContext, transactionId);
     });
@@ -790,14 +732,6 @@ export class SpaceIsolationService {
 
       this._recalculateAccountBalance(authContext.spaceId, existing.account_id);
 
-      this.logAudit({
-        spaceId: authContext.spaceId,
-        actorUserId: authContext.userId,
-        action: 'transaction.delete',
-        entityType: 'transactions',
-        entityId: transactionId,
-        oldData: existing,
-      });
 
       return { deleted: true, id: transactionId };
     });
@@ -821,15 +755,6 @@ export class SpaceIsolationService {
       )
       .run(paidStatus, effective, transactionId, authContext.spaceId);
 
-    this.logAudit({
-      spaceId: authContext.spaceId,
-      actorUserId: authContext.userId,
-      action: 'transaction.set_paid',
-      entityType: 'transactions',
-      entityId: transactionId,
-      oldData: { paidStatus: existing.paid_status },
-      newData: { paidStatus, effective },
-    });
 
     return this.getTransaction(authContext, transactionId);
   }
@@ -1023,14 +948,6 @@ export class SpaceIsolationService {
           description,
         );
 
-      this.logAudit({
-        spaceId: authContext.spaceId,
-        actorUserId: authContext.userId,
-        action: 'transfer.create',
-        entityType: 'transfers',
-        entityId: id,
-        newData: { sourceAccountId, destinationAccountId, amount, transferDate },
-      });
 
       return this.getTransfer(authContext, id);
     });
@@ -1146,14 +1063,6 @@ export class SpaceIsolationService {
           .run(amount, amount, invoice.id);
       }
 
-      this.logAudit({
-        spaceId: authContext.spaceId,
-        actorUserId: authContext.userId,
-        action: `card_transaction.${type}`,
-        entityType: 'transactions',
-        entityId: id,
-        newData: { creditCardId, amount, invoiceId: invoice.id },
-      });
 
       return this.getTransaction(authContext, id);
     });
@@ -1231,14 +1140,6 @@ export class SpaceIsolationService {
         )
         .run(newTotalPaid, newOpenAmount, newStatus, invoiceId);
 
-      this.logAudit({
-        spaceId: authContext.spaceId,
-        actorUserId: authContext.userId,
-        action: 'invoice_payment.register',
-        entityType: 'invoice_payments',
-        entityId: id,
-        newData: { invoiceId, amount, paymentDate },
-      });
 
       return { ...this.getInvoicePaymentSummary(authContext, invoiceId), duplicate: false, paymentId: id };
     });
@@ -1290,14 +1191,6 @@ export class SpaceIsolationService {
         )
         .run(newTotalPaid, newOpenAmount, newStatus, invoice.id);
 
-      this.logAudit({
-        spaceId: authContext.spaceId,
-        actorUserId: authContext.userId,
-        action: 'invoice_payment.uninform',
-        entityType: 'invoice_payments',
-        entityId: paymentId,
-        oldData: { amount: payment.amount },
-      });
 
       return this.getInvoicePaymentSummary(authContext, invoice.id);
     });
@@ -1379,14 +1272,6 @@ export class SpaceIsolationService {
         throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Soma das parcelas não bate com o valor total.', 500);
       }
 
-      this.logAudit({
-        spaceId: authContext.spaceId,
-        actorUserId: authContext.userId,
-        action: 'installment_plan.create',
-        entityType: 'installment_plans',
-        entityId: id,
-        newData: { totalAmount, installmentsCount },
-      });
 
       return this.getInstallmentPlan(authContext, id);
     });
@@ -1473,14 +1358,6 @@ export class SpaceIsolationService {
         endDate,
       );
 
-    this.logAudit({
-      spaceId: authContext.spaceId,
-      actorUserId: authContext.userId,
-      action: 'recurrence.create',
-      entityType: 'recurrences',
-      entityId: id,
-      newData: { description, type, amount, frequency, startDate },
-    });
 
     return this.getRecurrence(authContext, id);
   }
@@ -1591,14 +1468,6 @@ export class SpaceIsolationService {
         .prepare("UPDATE recurrence_occurrences SET status = 'promoted', transaction_id = ? WHERE id = ?")
         .run(transactionId, occurrenceId);
 
-      this.logAudit({
-        spaceId: authContext.spaceId,
-        actorUserId: authContext.userId,
-        action: 'recurrence_occurrence.promote',
-        entityType: 'recurrence_occurrences',
-        entityId: occurrenceId,
-        newData: { transactionId },
-      });
 
       return this.getTransaction(authContext, transactionId);
     });
@@ -1625,25 +1494,10 @@ export class SpaceIsolationService {
       this.db
         .prepare("UPDATE accounts SET archived_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND space_id = ?")
         .run(accountId, authContext.spaceId);
-      this.logAudit({
-        spaceId: authContext.spaceId,
-        actorUserId: authContext.userId,
-        action: 'account.archive',
-        entityType: 'accounts',
-        entityId: accountId,
-        newData: { impactTransactions: impact },
-      });
       return { archived: true, deleted: false, impact: { transactionsCount: impact } };
     }
 
     this.db.prepare('DELETE FROM accounts WHERE id = ? AND space_id = ?').run(accountId, authContext.spaceId);
-    this.logAudit({
-      spaceId: authContext.spaceId,
-      actorUserId: authContext.userId,
-      action: 'account.delete',
-      entityType: 'accounts',
-      entityId: accountId,
-    });
     return { archived: false, deleted: true, impact: { transactionsCount: 0 } };
   }
 
@@ -1666,14 +1520,6 @@ export class SpaceIsolationService {
       this.db
         .prepare("UPDATE categories SET archived_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND space_id = ?")
         .run(categoryId, authContext.spaceId);
-      this.logAudit({
-        spaceId: authContext.spaceId,
-        actorUserId: authContext.userId,
-        action: 'category.archive',
-        entityType: 'categories',
-        entityId: categoryId,
-        newData: { txCount, childCount, itemCount },
-      });
       return {
         archived: true,
         deleted: false,
@@ -1682,13 +1528,6 @@ export class SpaceIsolationService {
     }
 
     this.db.prepare('DELETE FROM categories WHERE id = ? AND space_id = ?').run(categoryId, authContext.spaceId);
-    this.logAudit({
-      spaceId: authContext.spaceId,
-      actorUserId: authContext.userId,
-      action: 'category.delete',
-      entityType: 'categories',
-      entityId: categoryId,
-    });
     return { archived: false, deleted: true, impact: { transactionsCount: 0, childCategoriesCount: 0, purchaseItemsCount: 0 } };
   }
 
@@ -1708,25 +1547,10 @@ export class SpaceIsolationService {
       this.db
         .prepare("UPDATE credit_cards SET archived_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND space_id = ?")
         .run(cardId, authContext.spaceId);
-      this.logAudit({
-        spaceId: authContext.spaceId,
-        actorUserId: authContext.userId,
-        action: 'credit_card.archive',
-        entityType: 'credit_cards',
-        entityId: cardId,
-        newData: { txCount, invoiceCount },
-      });
       return { archived: true, deleted: false, impact: { transactionsCount: txCount, invoicesCount: invoiceCount } };
     }
 
     this.db.prepare('DELETE FROM credit_cards WHERE id = ? AND space_id = ?').run(cardId, authContext.spaceId);
-    this.logAudit({
-      spaceId: authContext.spaceId,
-      actorUserId: authContext.userId,
-      action: 'credit_card.delete',
-      entityType: 'credit_cards',
-      entityId: cardId,
-    });
     return { archived: false, deleted: true, impact: { transactionsCount: 0, invoicesCount: 0 } };
   }
 
@@ -2021,14 +1845,6 @@ export class SpaceIsolationService {
         )
         .run(importedAccounts, importedCards, importedCategories, importedTransactions, importedPayments, skipped, batchId);
 
-      this.logAudit({
-        spaceId: authContext.spaceId,
-        actorUserId: authContext.userId,
-        action: 'import.create',
-        entityType: 'import_batches',
-        entityId: batchId,
-        newData: { importedAccounts, importedCards, importedCategories, importedTransactions, importedPayments, skipped },
-      });
 
       return {
         batchId,
@@ -2106,14 +1922,6 @@ export class SpaceIsolationService {
 
       this.db.prepare("UPDATE import_batches SET status = 'reversed', reversed_at = datetime('now') WHERE id = ?").run(batchId);
 
-      this.logAudit({
-        spaceId: authContext.spaceId,
-        actorUserId: authContext.userId,
-        action: 'import.reverse',
-        entityType: 'import_batches',
-        entityId: batchId,
-        newData: { entitiesCount: entities.length },
-      });
 
       return { batchId, reversed: true, entitiesCount: entities.length };
     });
@@ -2175,14 +1983,6 @@ export class SpaceIsolationService {
         allowedOptions ? JSON.stringify(allowedOptions) : null,
       );
 
-    this.logAudit({
-      spaceId: authContext.spaceId,
-      actorUserId: authContext.userId,
-      action: 'attribute_definition.create',
-      entityType: 'attribute_definitions',
-      entityId: id,
-      newData: { name, slug, dataType, version: 1 },
-    });
 
     return this.getAttributeDefinition(authContext, id);
   }
@@ -2249,15 +2049,6 @@ export class SpaceIsolationService {
             current.id,
           );
 
-        this.logAudit({
-          spaceId: authContext.spaceId,
-          actorUserId: authContext.userId,
-          action: 'attribute_definition.new_version',
-          entityType: 'attribute_definitions',
-          entityId: newVersionId,
-          oldData: { id: current.id, dataType: current.data_type, version: current.version },
-          newData: { id: newVersionId, dataType, version: newVersion },
-        });
 
         this.db.exec('COMMIT;');
         return this.getAttributeDefinition(authContext, newVersionId);
@@ -2480,15 +2271,6 @@ export class SpaceIsolationService {
       // Remove o produto fonte
       this.db.prepare('DELETE FROM products WHERE id = ?').run(source.id);
 
-      this.logAudit({
-        spaceId: authContext.spaceId,
-        actorUserId: authContext.userId,
-        action: 'products.merge',
-        entityType: 'products',
-        entityId: target.id,
-        oldData: { sourceId: source.id, sourceName: source.name },
-        newData: { targetId: target.id, targetName: target.name },
-      });
 
       this.db.exec('COMMIT;');
       return this.getProduct(authContext, target.id);
@@ -2659,14 +2441,6 @@ export class SpaceIsolationService {
         }
       }
 
-      this.logAudit({
-        spaceId: authContext.spaceId,
-        actorUserId: authContext.userId,
-        action: 'purchase.create',
-        entityType: 'purchases',
-        entityId: purchaseId,
-        newData: { netAmount, itemsCount: processedItems.length },
-      });
 
       this.db.exec('COMMIT;');
       return this.getPurchase(authContext, purchaseId);
@@ -2788,14 +2562,6 @@ export class SpaceIsolationService {
           refundDate,
         );
 
-      this.logAudit({
-        spaceId: authContext.spaceId,
-        actorUserId: authContext.userId,
-        action: 'item_refund.create',
-        entityType: 'item_refunds',
-        entityId: id,
-        newData: { purchaseItemId, refundQuantity, refundAmount },
-      });
 
       this.db.exec('COMMIT;');
       return this.getItemRefundSummary(authContext, purchaseItemId);
@@ -3022,3 +2788,9 @@ export class SpaceIsolationService {
     };
   }
 }
+
+export const SpaceIsolationService = new Proxy(SpaceIsolationServiceImpl, {
+  construct(target, args) {
+    return withAuditInterceptor(new target(...args));
+  }
+});

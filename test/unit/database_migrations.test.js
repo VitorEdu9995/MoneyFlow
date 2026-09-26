@@ -12,6 +12,7 @@ test('Migrations estruturais sobem em banco vazio com integridade e sem dados au
     '002_custom_attributes_and_purchases',
     '003_financial_core_phase2',
     '004_import_real_mvp_format',
+    '005_audit_append_only',
   ]);
 
   // Nenhuma tabela possui dados inseridos automaticamente
