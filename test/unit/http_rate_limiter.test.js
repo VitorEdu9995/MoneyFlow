@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert';
 import { createRateLimiter, clearRateLimitStore } from '../../src/gateway/httpRateLimiter.js';
+import { logger } from '../../src/utils/logger.js';
 
 test('HTTP Rate Limiter Middleware', async (t) => {
   t.beforeEach(() => {
@@ -115,5 +116,33 @@ test('HTTP Rate Limiter Middleware', async (t) => {
     res.statusCode = 200;
     middleware(req, res, next);
     assert.strictEqual(nextCalled, 2);
+  });
+
+  await t.test('nao deve vazar query string no log do rate limiter', (t) => {
+    const middleware = createRateLimiter({ userIpLimit: 1, windowMs: 1000 });
+    let nextCalled = 0;
+    
+    const req = { headers: { 'x-forwarded-for': '127.0.0.1' }, url: '/api/login?password=secreta' };
+    const res = {
+      headers: {},
+      statusCode: 200,
+      setHeader(k, v) { this.headers[k] = v; },
+      end() {}
+    };
+    const next = () => { nextCalled++; };
+
+    let loggedUrl = '';
+    const originalInfo = logger.info;
+    logger.info = (msg, data) => { loggedUrl = data.url; };
+
+    // Request 1 - passa
+    middleware(req, res, next);
+    // Request 2 - bloqueia e loga
+    middleware(req, res, next);
+
+    logger.info = originalInfo;
+
+    assert.strictEqual(loggedUrl, '/api/login');
+    assert.ok(!loggedUrl.includes('password=secreta'));
   });
 });

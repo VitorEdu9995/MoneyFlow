@@ -27,7 +27,7 @@ export function createRateLimiter(options = {}) {
     if (globalTimestamps.length >= globalLimit) {
       logger.info('Global rate limit exceeded', { 
         ip: req.ip || req.connection?.remoteAddress,
-        url: req.url 
+        url: req.url ? req.url.split('?')[0] : req.url 
       });
       res.setHeader('Retry-After', Math.ceil(windowMs / 1000));
       res.statusCode = 429;
@@ -53,7 +53,7 @@ export function createRateLimiter(options = {}) {
     if (userTimestamps.length >= userIpLimit) {
       logger.info('User/IP rate limit exceeded', { 
         identifier: userOrIp, 
-        url: req.url 
+        url: req.url ? req.url.split('?')[0] : req.url 
       });
       res.setHeader('Retry-After', Math.ceil(windowMs / 1000));
       res.setHeader('X-RateLimit-Limit', userIpLimit);
