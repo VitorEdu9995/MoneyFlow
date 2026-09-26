@@ -3,6 +3,6 @@
 
 @layer base {
   body {
-    @apply bg-background text-texto font-sans;
+    @apply bg-superficie text-texto font-sans tabular-nums;
   }
 }

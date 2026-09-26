@@ -1,5 +1,6 @@
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import { Home, CreditCard, List, Tags, PieChart, BarChart2, Briefcase } from 'lucide-react';
+import logo from '../assets/logo.png';
 
 export default function Layout() {
   const location = useLocation();
@@ -14,14 +15,14 @@ export default function Layout() {
   ];
 
   return (
-    <div className="flex h-screen bg-background text-texto">
+    <div className="flex h-screen bg-superficie text-texto">
       {/* Sidebar */}
       <aside className="w-64 bg-superficie border-r border-[#2A2A2A] flex flex-col">
         <div className="p-4 border-b border-[#2A2A2A]">
-          <h1 className="text-xl font-bold text-mentaClara">MoneyFlow</h1>
+          <img src={logo} alt="MoneyFlow Logo" className="h-8" />
           <div className="mt-4">
             <label className="text-sm text-textoSecundario">Espaço</label>
-            <select className="w-full mt-1 bg-background text-texto p-2 rounded border border-[#2A2A2A]">
+            <select className="w-full mt-1 bg-superficie text-texto p-2 rounded border border-[#2A2A2A]">
               <option>Pessoal</option>
               <option>Empresa</option>
             </select>
