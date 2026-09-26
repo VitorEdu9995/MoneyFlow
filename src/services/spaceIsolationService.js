@@ -2856,4 +2856,168 @@ export class SpaceIsolationService {
     query += ' ORDER BY ph.date DESC, ph.created_at DESC';
     return this.db.prepare(query).all(...params);
   }
+
+  // =========================================================================
+  // CASHFLOW SANKEY DINÂMICO (ECO-64)
+  //
+  // Gera nodes e links para visualização Sankey do fluxo de caixa de um período.
+  //
+  // Regras invariantes:
+  // 1. Transferências internas (type = 'transfer') não inflam entradas nem saídas.
+  // 2. Previsões (recurrence_occurrences com status = 'forecast') não viram fatos:
+  //    só transações com paid_status = 'paid' ou effective_date preenchido entram
+  //    no caixa; compras no cartão (competência) entram na base de lançamento.
+  // 3. Pagamento de fatura (type = 'card_payment') aparece no caixa como saída da
+  //    conta pagadora; as compras individuais (type = 'card_purchase') entram na
+  //    base de competência como despesas por categoria.
+  // 4. Todos os valores são em centavos (inteiros).
+  // 5. Nodes e links carregam metadados (ids dos lançamentos) para explicabilidade.
+  //
+  // Estrutura do retorno:
+  //   { period, filters, basis, nodes: [{id, label, total}], links: [{source, target, value, transactions}] }
+  //
+  // Basis:
+  //   'cash'    → só transações paid_status = 'paid' filtradas por effective_date (caixa)
+  //   'accrual' → todas as transações (incluindo card_purchase) filtradas por transaction_date (competência)
+  // =========================================================================
+
+  getCashflowSankey(authContext, {
+    startDate,
+    endDate,
+    basis = 'accrual',
+    accountId = null,
+    categoryId = null,
+  } = {}) {
+    requireAuthorization(authContext, Permissions.REPORTS_READ);
+
+    const today = new Date().toISOString().slice(0, 10);
+    const resolvedStart = startDate || `${today.slice(0, 7)}-01`;
+    const resolvedEnd = endDate || today;
+
+    // Seleciona transações de acordo com a base
+    let dateField;
+    let paidFilter;
+    if (basis === 'cash') {
+      dateField = 'COALESCE(effective_date, transaction_date)';
+      paidFilter = "AND paid_status = 'paid'";
+    } else {
+      dateField = 'transaction_date';
+      paidFilter = '';
+    }
+
+    const params = [authContext.spaceId, resolvedStart, resolvedEnd];
+    let extraFilter = '';
+    if (accountId) {
+      extraFilter += ' AND account_id = ?';
+      params.push(accountId);
+    }
+    if (categoryId) {
+      extraFilter += ' AND category_id = ?';
+      params.push(categoryId);
+    }
+
+    // Exclui transferências (não inflam entradas/saídas) e registra compras de cartão em competência
+    const rows = this.db
+      .prepare(
+        `SELECT t.id, t.type, t.amount, t.description,
+                COALESCE(c.name, 'Sem categoria') as category_name,
+                c.kind as category_kind,
+                ${dateField} as ref_date
+         FROM transactions t
+         LEFT JOIN categories c ON c.id = t.category_id
+         WHERE t.space_id = ?
+           AND t.deleted_at IS NULL
+           AND ${dateField} >= ? AND ${dateField} <= ?
+           AND t.type NOT IN ('transfer')
+           ${paidFilter}
+           ${extraFilter}
+         ORDER BY t.type, category_name`,
+      )
+      .all(...params);
+
+    // Nodes padrão
+    const NODE_INCOME = 'node:income';
+    const NODE_EXPENSE = 'node:expense';
+    const NODE_CARD_PAYMENT = 'node:card_payment';
+
+    const nodeMap = new Map();
+    const ensureNode = (id, label) => {
+      if (!nodeMap.has(id)) {
+        nodeMap.set(id, { id, label, total: 0 });
+      }
+      return nodeMap.get(id);
+    };
+
+    ensureNode(NODE_INCOME, 'Receitas');
+    ensureNode(NODE_EXPENSE, 'Despesas');
+
+    // Links: { sourceId -> targetId -> { value, transactionIds } }
+    const linkIndex = new Map();
+    const ensureLink = (sourceId, targetId) => {
+      const key = `${sourceId}||${targetId}`;
+      if (!linkIndex.has(key)) {
+        linkIndex.set(key, { source: sourceId, target: targetId, value: 0, transactionIds: [] });
+      }
+      return linkIndex.get(key);
+    };
+
+    for (const row of rows) {
+      const catNodeId = `cat:${row.category_name}`;
+
+      if (row.type === 'income' || row.type === 'refund') {
+        // Receita: categoria de receita → Receitas (nó central)
+        const catNode = ensureNode(catNodeId, row.category_name);
+        catNode.total += row.amount;
+        nodeMap.get(NODE_INCOME).total += row.amount;
+        const lnk = ensureLink(catNodeId, NODE_INCOME);
+        lnk.value += row.amount;
+        lnk.transactionIds.push(row.id);
+      } else if (row.type === 'expense' || row.type === 'card_purchase') {
+        // Despesa: Despesas → categoria de despesa
+        const catNode = ensureNode(catNodeId, row.category_name);
+        catNode.total += row.amount;
+        nodeMap.get(NODE_EXPENSE).total += row.amount;
+        const lnk = ensureLink(NODE_EXPENSE, catNodeId);
+        lnk.value += row.amount;
+        lnk.transactionIds.push(row.id);
+      } else if (row.type === 'card_payment') {
+        // Pagamento de fatura: Receitas → Pagamento de Fatura (saída de caixa real)
+        const cpNode = ensureNode(NODE_CARD_PAYMENT, 'Pagamento de Fatura');
+        cpNode.total += row.amount;
+        nodeMap.get(NODE_INCOME).total += 0; // não inflam receitas
+        nodeMap.get(NODE_EXPENSE).total += row.amount;
+        const lnk = ensureLink(NODE_EXPENSE, NODE_CARD_PAYMENT);
+        lnk.value += row.amount;
+        lnk.transactionIds.push(row.id);
+      }
+    }
+
+    // Link central: Receitas → Despesas (fluxo agregado)
+    const incomeTotal = nodeMap.get(NODE_INCOME).total;
+    const expenseTotal = nodeMap.get(NODE_EXPENSE).total;
+    if (incomeTotal > 0 && expenseTotal > 0) {
+      const centralLink = ensureLink(NODE_INCOME, NODE_EXPENSE);
+      centralLink.value = Math.min(incomeTotal, expenseTotal);
+    }
+
+    // Remove nodes com total zero para não poluir o gráfico
+    const nodes = [...nodeMap.values()].filter((n) => n.total > 0);
+    const nodeIds = new Set(nodes.map((n) => n.id));
+    const links = [...linkIndex.values()].filter(
+      (l) => l.value > 0 && nodeIds.has(l.source) && nodeIds.has(l.target),
+    );
+
+    return {
+      period: { startDate: resolvedStart, endDate: resolvedEnd },
+      filters: { accountId, categoryId },
+      basis,
+      nodes,
+      links,
+      summary: {
+        totalIncome: incomeTotal,
+        totalExpense: expenseTotal,
+        netBalance: incomeTotal - expenseTotal,
+      },
+    };
+  }
 }
