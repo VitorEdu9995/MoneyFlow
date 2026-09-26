@@ -1211,6 +1211,7 @@ export class SpaceIsolationService {
         accountId,
         transactionDate: paymentDate,
       });
+      this.setTransactionPaid(authContext, { transactionId, paid: true, effectiveDate: paymentDate });
 
       this.db
         .prepare(

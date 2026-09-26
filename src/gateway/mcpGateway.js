@@ -637,12 +637,15 @@ export class McpGateway {
     const startDate = args.start_date || `${today.slice(0, 7)}-01`;
     const endDate = args.end_date || today;
 
-    // Caixa (paid_status = 'paid' por effective_date)
+    // Caixa (paid_status = 'paid' por effective_date ou pagamento de fatura card_payment)
     const cashRows = this.service.db
       .prepare(
         `SELECT type, SUM(amount) as total FROM transactions
-         WHERE space_id = ? AND deleted_at IS NULL AND paid_status = 'paid'
-           AND effective_date >= ? AND effective_date <= ? AND type != 'transfer'
+         WHERE space_id = ? AND deleted_at IS NULL
+           AND (paid_status = 'paid' OR type = 'card_payment')
+           AND COALESCE(effective_date, transaction_date) >= ?
+           AND COALESCE(effective_date, transaction_date) <= ?
+           AND type != 'transfer'
          GROUP BY type`,
       )
       .all(authContext.spaceId, startDate, endDate);

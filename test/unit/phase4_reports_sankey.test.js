@@ -524,3 +524,127 @@ test('Fase 4 — Reconciliação em centavos: Sankey soma exatamente sem arredon
   assert.equal(result.status, 'ok');
   assert.equal(result.data.summary.totalExpense, 25001, 'soma em centavos deve ser exata: 25001');
 });
+
+test('Fase 4 — Adversarial Caixa x Competência: mesma fatura em meses diferentes não duplica nem omite', async () => {
+  const db = createDatabase(':memory:');
+  runMigrations(db);
+  const service = new SpaceIsolationService(db);
+  const gateway = new McpGateway({ service });
+
+  const owner = service.createUser({ email: 'cxc@test.dev', name: 'CxC' });
+  const space = service.createSpace({ name: 'CxC Space', ownerUserId: owner.id });
+  const ctx = service.resolveAuthContext({ userId: owner.id, spaceId: space.id });
+  const cat = service.createCategory(ctx, { name: 'Serviços', kind: 'expense' });
+  const acc = service.createAccount(ctx, { name: 'Banco', openingBalance: 100000 });
+  const card = service.createCreditCard(ctx, { name: 'Cartão', closingDay: 25, dueDay: 5, paymentAccountId: acc.id });
+
+  // Compra feita em Setembro (competência Setembro)
+  const purchase = service.createCardTransaction(ctx, {
+    type: 'card_purchase',
+    creditCardId: card.id,
+    amount: 12000,
+    description: 'Servidor Nuvem',
+    categoryId: cat.id,
+    transactionDate: '2026-09-10',
+  });
+
+  // Pagamento da fatura em Outubro (caixa Outubro)
+  service.registerInvoicePayment(ctx, {
+    invoiceId: purchase.credit_card_invoice_id,
+    amount: 12000,
+    paymentDate: '2026-10-05',
+    accountId: acc.id,
+  });
+
+  // 1. Resumo financeiro em Setembro: caixa deve ter despesa 0, competência deve ter 12000
+  const summarySet = await gateway.executeTool('get_financial_summary', {
+    start_date: '2026-09-01', end_date: '2026-09-30',
+  }, ctx);
+  assert.equal(summarySet.data.cashflow.expense, 0, 'em Setembro o caixa não tem pagamento de fatura');
+  assert.equal(summarySet.data.topExpenses.length, 1, 'em Setembro a compra aparece em maiores gastos (competência)');
+  assert.equal(summarySet.data.topExpenses[0].amount, 12000);
+
+  // 2. Resumo financeiro em Outubro: caixa deve ter despesa 12000 (pagamento de fatura)
+  const summaryOut = await gateway.executeTool('get_financial_summary', {
+    start_date: '2026-10-01', end_date: '2026-10-31',
+  }, ctx);
+  assert.equal(summaryOut.data.cashflow.expense, 12000, 'em Outubro o caixa reflete o pagamento da fatura');
+
+  // 3. Sankey em Setembro (accrual): mostra a compra na categoria Serviços
+  const sankeySetAccrual = await gateway.executeTool('get_cashflow_sankey', {
+    start_date: '2026-09-01', end_date: '2026-09-30', basis: 'accrual',
+  }, ctx);
+  assert.equal(sankeySetAccrual.data.summary.totalExpense, 12000);
+  assert.ok(sankeySetAccrual.data.nodes.some((n) => n.label === 'Serviços'));
+
+  // 4. Sankey em Setembro (cash): despesa 0
+  const sankeySetCash = await gateway.executeTool('get_cashflow_sankey', {
+    start_date: '2026-09-01', end_date: '2026-09-30', basis: 'cash',
+  }, ctx);
+  assert.equal(sankeySetCash.data.summary.totalExpense, 0);
+
+  // 5. Sankey em Outubro (cash): mostra Pagamento de Fatura com 12000
+  const sankeyOutCash = await gateway.executeTool('get_cashflow_sankey', {
+    start_date: '2026-10-01', end_date: '2026-10-31', basis: 'cash',
+  }, ctx);
+  assert.equal(sankeyOutCash.data.summary.totalExpense, 12000);
+  assert.ok(sankeyOutCash.data.nodes.some((n) => n.id === 'node:card_payment'));
+});
+
+test('Fase 4 — Adversarial Paginação: paginação não altera totais e preserva totalCount', async () => {
+  const db = createDatabase(':memory:');
+  runMigrations(db);
+  const service = new SpaceIsolationService(db);
+  const gateway = new McpGateway({ service });
+
+  const owner = service.createUser({ email: 'page@test.dev', name: 'Page' });
+  const space = service.createSpace({ name: 'Page Space', ownerUserId: owner.id });
+  const ctx = service.resolveAuthContext({ userId: owner.id, spaceId: space.id });
+  const cat = service.createCategory(ctx, { name: 'Despesas', kind: 'expense' });
+  const acc = service.createAccount(ctx, { name: 'Conta', openingBalance: 100000 });
+
+  // Insere 25 transações
+  for (let i = 1; i <= 25; i++) {
+    const day = String(i).padStart(2, '0');
+    service.createTransaction(ctx, {
+      type: 'expense',
+      description: `Gasto ${i}`,
+      amount: 1000,
+      accountId: acc.id,
+      categoryId: cat.id,
+      transactionDate: `2026-09-${day}`,
+    });
+  }
+
+  // Página 1 (per_page = 10)
+  const page1 = await gateway.executeTool('list_transactions', {
+    start_date: '2026-09-01', end_date: '2026-09-30', page: 1, per_page: 10,
+  }, ctx);
+  assert.equal(page1.status, 'ok');
+  assert.equal(page1.data.items.length, 10);
+  assert.equal(page1.data.pagination.totalCount, 25);
+  assert.equal(page1.data.pagination.totalPages, 3);
+
+  // Página 2 (per_page = 10)
+  const page2 = await gateway.executeTool('list_transactions', {
+    start_date: '2026-09-01', end_date: '2026-09-30', page: 2, per_page: 10,
+  }, ctx);
+  assert.equal(page2.status, 'ok');
+  assert.equal(page2.data.items.length, 10);
+  assert.equal(page2.data.pagination.totalCount, 25);
+
+  // Página 3 (per_page = 10)
+  const page3 = await gateway.executeTool('list_transactions', {
+    start_date: '2026-09-01', end_date: '2026-09-30', page: 3, per_page: 10,
+  }, ctx);
+  assert.equal(page3.status, 'ok');
+  assert.equal(page3.data.items.length, 5);
+  assert.equal(page3.data.pagination.totalCount, 25);
+
+  // Os totais agregados (relatório transactions_list_results) permanecem idênticos independentemente de paginação
+  const results = await gateway.executeTool('transactions_list_results', {
+    start_date: '2026-09-01', end_date: '2026-09-30',
+  }, ctx);
+  assert.equal(results.data.expense, 25000);
+});
+
