@@ -91,3 +91,25 @@ test('Attachment quotas and role limits', async () => {
     /negada: o papel 'viewer' n/
   );
 });
+
+test('Attachment audit redacts PII embedded in file names before persistence', async () => {
+  const { db, iso, att } = await setup();
+  const user = iso.createUser({ name: 'U1', email: 'u1@a.com' });
+  const space = iso.createSpace({ name: 'S1', ownerUserId: user.id });
+  const context = iso.resolveAuthContext({ userId: user.id, spaceId: space.id });
+  const cardNumber = '4111 1111 1111 1111';
+  const pdf = Buffer.from('255044462D312E340A25C3A4C3BCC3B6C39F0A', 'hex');
+
+  await att.uploadAttachment(context, pdf, {
+    entityType: 'transaction',
+    entityId: randomUUID(),
+    fileName: `fatura-${cardNumber}.pdf`,
+    declaredMimeType: 'application/pdf'
+  });
+
+  const audit = db.prepare("SELECT new_data FROM audit_logs WHERE action = 'attachment.upload'").get();
+  const newData = JSON.parse(audit.new_data);
+
+  assert.doesNotMatch(audit.new_data, new RegExp(cardNumber.replaceAll(' ', '\\s*')));
+  assert.strictEqual(newData.fileName, 'fatura-[REDACTED].pdf');
+});

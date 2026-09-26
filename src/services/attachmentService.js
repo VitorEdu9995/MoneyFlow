@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { AppError, ErrorCodes } from '../domain/envelope.js';
 import { Permissions, requireAuthorization } from '../domain/authorization.js';
-import { logger } from '../utils/logger.js';
+import { logger, redact } from '../utils/logger.js';
 
 const UPLOAD_DIR = path.join(process.cwd(), '.data', 'attachments');
 
@@ -68,13 +68,15 @@ export class AttachmentService {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(id, authContext.spaceId, entityType, entityId, fileName, declaredMimeType, realMimeType, buffer.length, storagePath, authContext.userId);
 
+    const newData = redact({ id, fileName, entityType, entityId, fileSize: buffer.length });
+
     this.spaceIsolationService.logAudit({
       spaceId: authContext.spaceId,
       actorUserId: authContext.userId,
       action: 'attachment.upload',
       entityType: 'attachments',
       entityId: id,
-      newData: { id, fileName, entityType, entityId, fileSize: buffer.length }
+      newData
     });
 
     return { id, fileName, realMimeType, fileSize: buffer.length };
