@@ -15,6 +15,7 @@ import { ExtensionToolContractRegistry } from '../contracts/extensionToolRegistr
 import { AppError, ErrorCodes } from '../domain/envelope.js';
 import { Permissions, requireAuthorization } from '../domain/authorization.js';
 import { randomUUID } from 'node:crypto';
+import { logger, redact } from '../utils/logger.js';
 
 export const OPEN_FINANCE_DISABLED_TOOLS = new Set([
   'get_latest_imports',
@@ -60,114 +61,122 @@ export class McpGateway {
     return this.registry.getTool(toolName);
   }
 
-  /**
-   * Executa uma ferramenta com validação de contrato, isolamento de espaço e regras de segurança.
-   *
-   * @param {string} toolName - Nome da ferramenta MCP
-   * @param {object} args - Argumentos fornecidos na chamada
-   * @param {object} authContext - Contexto de autenticação e espaço { spaceId, userId, role }
-   * @returns {Promise<object>|object} Resultado no formato compatível
-   */
   async executeTool(toolName, args = {}, authContext = {}) {
-    // 1. Validação de existência da ferramenta — primeiro no catálogo congelado, depois nas extensões
-    let toolDefinition;
-    let isExtension = false;
+    logger.info(`Executing tool ${toolName}`, { args, spaceId: authContext?.spaceId });
     try {
-      toolDefinition = this.registry.getTool(toolName);
-    } catch {
-      // Tenta no registry de extensões (Fase 4 e futuras)
+      // 1. Validação de existência da ferramenta — primeiro no catálogo congelado, depois nas extensões
+      let toolDefinition;
+      let isExtension = false;
       try {
-        toolDefinition = this.extensionRegistry.getTool(toolName);
-        isExtension = true;
+        toolDefinition = this.registry.getTool(toolName);
       } catch {
+        // Tenta no registry de extensões (Fase 4 e futuras)
+        try {
+          toolDefinition = this.extensionRegistry.getTool(toolName);
+          isExtension = true;
+        } catch {
+          throw new AppError(
+            ErrorCodes.NOT_FOUND,
+            `Ferramenta desconhecida: '${toolName}' não existe no catálogo de ferramentas.`,
+            404,
+          );
+        }
+      }
+
+      // 2. Validação estrita de argumentos contra o schema congelado (ou de extensão)
+      const activeRegistry = isExtension ? this.extensionRegistry : this.registry;
+      const validation = activeRegistry.validateArgs(toolName, args);
+      if (!validation.valid) {
         throw new AppError(
-          ErrorCodes.NOT_FOUND,
-          `Ferramenta desconhecida: '${toolName}' não existe no catálogo de ferramentas.`,
-          404,
+          ErrorCodes.VALIDATION_ERROR,
+          `Validação de argumentos falhou: ${validation.errors.join('; ')}`,
+          400,
+          { errors: validation.errors },
         );
       }
-    }
 
-    // 2. Validação estrita de argumentos contra o schema congelado (ou de extensão)
-    const activeRegistry = isExtension ? this.extensionRegistry : this.registry;
-    const validation = activeRegistry.validateArgs(toolName, args);
-    if (!validation.valid) {
-      throw new AppError(
-        ErrorCodes.VALIDATION_ERROR,
-        `Validação de argumentos falhou: ${validation.errors.join('; ')}`,
-        400,
-        { errors: validation.errors },
-      );
-    }
-
-    // 3. Regra de ouro Open Finance: explicitamente desabilitado
-    if (OPEN_FINANCE_DISABLED_TOOLS.has(toolName)) {
-      return {
-        status: 'OPEN_FINANCE_DISABLED',
-        message: 'Open Finance está explicitamente desabilitado no sistema.',
-        isMockFixture: true,
-      };
-    }
-
-    // 4. Se a chamada for identificada como mock fixture e não houver service ou spaceId
-    //    (apenas para ferramentas do catálogo congelado, não extensões)
-    let fixture = null;
-    if (!isExtension) {
-      try {
-        fixture = this.registry.getFixture(toolName);
-      } catch { /* extensão sem fixture — prossegue normalmente */ }
-    }
-    const isExactFixtureCall =
-      !isExtension &&
-      (!authContext || !authContext.spaceId) &&
-      fixture &&
-      JSON.stringify(args) === JSON.stringify(fixture.validCall.arguments);
-
-    if (isExactFixtureCall) {
-      return { ...fixture.expectedReturnSample };
-    }
-
-    // 5. Exigir contexto de autenticação com space_id válido
-    if (!authContext || !authContext.spaceId) {
-      throw new AppError(
-        ErrorCodes.UNAUTHENTICATED,
-        'Contexto de espaço (spaceId) é obrigatório para execução de ferramentas.',
-        401,
-      );
-    }
-
-    // Se o authContext recebido não possuir membership detalhado, resolver pelo serviço
-    let effectiveContext = authContext;
-    if (this.service && (!effectiveContext.membership || !effectiveContext.membership.status)) {
-      if (effectiveContext.userId) {
-        effectiveContext = this.service.resolveAuthContext({
-          userId: effectiveContext.userId,
-          spaceId: effectiveContext.spaceId,
-        });
+      // 3. Regra de ouro Open Finance: explicitamente desabilitado
+      if (OPEN_FINANCE_DISABLED_TOOLS.has(toolName)) {
+        const result = {
+          status: 'OPEN_FINANCE_DISABLED',
+          message: 'Open Finance está explicitamente desabilitado no sistema.',
+          isMockFixture: true,
+        };
+        logger.info(`Tool ${toolName} disabled (Open Finance)`, { result });
+        return result;
       }
-    }
 
-    // 6. Verificação de limites de lote
-    if (BATCH_LIMITS[toolName] !== undefined) {
-      this._validateBatchLimits(toolName, args);
-    }
+      // 4. Se a chamada for identificada como mock fixture e não houver service ou spaceId
+      //    (apenas para ferramentas do catálogo congelado, não extensões)
+      let fixture = null;
+      if (!isExtension) {
+        try {
+          fixture = this.registry.getFixture(toolName);
+        } catch { /* extensão sem fixture — prossegue normalmente */ }
+      }
+      const isExactFixtureCall =
+        !isExtension &&
+        (!authContext || !authContext.spaceId) &&
+        fixture &&
+        JSON.stringify(args) === JSON.stringify(fixture.validCall.arguments);
 
-    // 7. Roteamento e execução do handler correspondente
-    const handler = this._getHandler(toolName);
-    if (!handler) {
-      return {
+      if (isExactFixtureCall) {
+        const result = { ...fixture.expectedReturnSample };
+        logger.info(`Tool ${toolName} returning fixture`, { result });
+        return redact(result);
+      }
+
+      // 5. Exigir contexto de autenticação com space_id válido
+      if (!authContext || !authContext.spaceId) {
+        throw new AppError(
+          ErrorCodes.UNAUTHENTICATED,
+          'Contexto de espaço (spaceId) é obrigatório para execução de ferramentas.',
+          401,
+        );
+      }
+
+      // Se o authContext recebido não possuir membership detalhado, resolver pelo serviço
+      let effectiveContext = authContext;
+      if (this.service && (!effectiveContext.membership || !effectiveContext.membership.status)) {
+        if (effectiveContext.userId) {
+          effectiveContext = this.service.resolveAuthContext({
+            userId: effectiveContext.userId,
+            spaceId: effectiveContext.spaceId,
+          });
+        }
+      }
+
+      // 6. Verificação de limites de lote
+      if (BATCH_LIMITS[toolName] !== undefined) {
+        this._validateBatchLimits(toolName, args);
+      }
+
+      // 7. Roteamento e execução do handler correspondente
+      const handler = this._getHandler(toolName);
+      if (!handler) {
+        const result = {
+          status: 'ok',
+          isMockFixture: true,
+          tool: toolName,
+        };
+        logger.info(`Tool ${toolName} missing handler, returning stub`, { result });
+        return result;
+      }
+
+      const resultData = await handler.call(this, args, effectiveContext);
+      const result = {
         status: 'ok',
-        isMockFixture: true,
-        tool: toolName,
+        data: resultData,
+        isMockFixture: false,
       };
+      
+      logger.info(`Tool ${toolName} completed successfully`, { result });
+      return redact(result);
+      
+    } catch (error) {
+      logger.error(`Error executing tool ${toolName}`, error);
+      throw error;
     }
-
-    const result = await handler.call(this, args, effectiveContext);
-    return {
-      status: 'ok',
-      data: result,
-      isMockFixture: false,
-    };
   }
 
   /**
