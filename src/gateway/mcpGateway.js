@@ -718,15 +718,17 @@ export class McpGateway {
       else if (r.type === 'expense' || r.type === 'card_payment') cashExpense += r.total;
     }
 
-    // Maiores gastos (base lançamento, inclui compras de cartão)
-    const topExpenses = this.service.db
-      .prepare(
-        `SELECT description, amount, transaction_date, type FROM transactions
-         WHERE space_id = ? AND deleted_at IS NULL AND type IN ('expense', 'card_purchase')
-           AND transaction_date >= ? AND transaction_date <= ?
-         ORDER BY amount DESC LIMIT 5`,
-      )
-      .all(authContext.spaceId, startDate, endDate);
+    // Maiores gastos (base lançamento, inclui compras de cartão — exclui contas-cofrinho)
+        const topExpenses = this.service.db
+          .prepare(
+            `SELECT t.description, t.amount, t.transaction_date, t.type FROM transactions t
+             JOIN accounts a ON a.id = t.account_id
+             WHERE t.space_id = ? AND t.deleted_at IS NULL AND t.type IN ('expense', 'card_purchase')
+               AND t.transaction_date >= ? AND t.transaction_date <= ?
+               AND COALESCE(a.is_piggy_bank, 0) = 0
+             ORDER BY t.amount DESC LIMIT 5`,
+          )
+          .all(authContext.spaceId, startDate, endDate);
 
     return {
       period: { startDate, endDate },
