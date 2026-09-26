@@ -12,6 +12,7 @@ test('Migrations estruturais sobem em banco vazio com integridade e sem dados au
     '002_custom_attributes_and_purchases',
     '003_financial_core_phase2',
     '004_import_real_mvp_format',
+    '005_audit_log_append_only',
   ]);
 
   // Nenhuma tabela possui dados inseridos automaticamente
@@ -42,7 +43,8 @@ test('Migrations são reversíveis via rollback explícito', () => {
   const db = createDatabase(':memory:');
   runMigrations(db);
 
-  // Reversão explícita na ordem de dependência (004, 003, depois 002 e depois 001)
+  // Reversão explícita na ordem de dependência (005, 004, 003, 002 e depois 001)
+  rollbackMigration(db, '005_audit_log_append_only');
   rollbackMigration(db, '004_import_real_mvp_format');
   rollbackMigration(db, '003_financial_core_phase2');
   rollbackMigration(db, '002_custom_attributes_and_purchases');
