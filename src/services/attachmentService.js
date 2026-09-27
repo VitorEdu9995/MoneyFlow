@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { AppError, ErrorCodes } from '../domain/envelope.js';
@@ -25,11 +25,48 @@ const CANONICAL_EXTENSIONS = Object.freeze({
   'image/png': '.png',
 });
 const MAX_FILE_NAME_BYTES = 255;
+const DEFAULT_RETENTION_DAYS = 30;
+const MAX_DOWNLOAD_URL_SECONDS = 15 * 60;
+const DOWNLOAD_URL_RATE_LIMIT = 30;
+const DOWNLOAD_URL_RATE_WINDOW_MS = 60 * 1000;
 
 export class AttachmentService {
   constructor(db, spaceIsolationService) {
     this.db = db;
     this.spaceIsolationService = spaceIsolationService;
+    this.downloadUrlRequests = new Map();
+  }
+
+  hashDownloadToken(token) {
+    return createHash('sha256').update(token).digest('hex');
+  }
+
+  _now() {
+    return new Date().toISOString();
+  }
+
+  _getRetentionDays(spaceId) {
+    return this.db.prepare('SELECT retention_days FROM attachment_retention_policies WHERE space_id = ?').get(spaceId)?.retention_days
+      ?? DEFAULT_RETENTION_DAYS;
+  }
+
+  _activeAttachment(attachmentId, spaceId = null) {
+    const spaceCondition = spaceId ? ' AND space_id = ?' : '';
+    const params = spaceId ? [attachmentId, spaceId, this._now()] : [attachmentId, this._now()];
+    return this.db.prepare(
+      `SELECT * FROM attachments WHERE id = ?${spaceCondition} AND deleted_at IS NULL AND (expires_at IS NULL OR expires_at > ?)`,
+    ).get(...params);
+  }
+
+  _assertDownloadUrlRateLimit(authContext) {
+    const key = `${authContext.spaceId}:${authContext.userId}`;
+    const now = Date.now();
+    const requests = (this.downloadUrlRequests.get(key) || []).filter((timestamp) => timestamp > now - DOWNLOAD_URL_RATE_WINDOW_MS);
+    if (requests.length >= DOWNLOAD_URL_RATE_LIMIT) {
+      throw new AppError(ErrorCodes.RATE_LIMITED, 'Limite de geração de URLs temporárias excedido. Tente novamente em breve.', 429);
+    }
+    requests.push(now);
+    this.downloadUrlRequests.set(key, requests);
   }
 
   async _ensureUploadDir() {
@@ -96,13 +133,15 @@ export class AttachmentService {
 
     // A própria inserção é a reserva de cota: a subconsulta e o INSERT pertencem
     // à mesma instrução SQLite, portanto não há janela entre validar e reservar.
+    const retentionDays = this._getRetentionDays(authContext.spaceId);
+    const expiresAt = new Date(Date.now() + retentionDays * 24 * 60 * 60 * 1000).toISOString();
     const reservation = this.db.prepare(
-      `INSERT INTO attachments (id, space_id, entity_type, entity_id, file_name, mime_type, real_mime_type, file_size, storage_path, uploaded_by)
-       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      `INSERT INTO attachments (id, space_id, entity_type, entity_id, file_name, mime_type, real_mime_type, file_size, storage_path, uploaded_by, expires_at)
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
        WHERE COALESCE((SELECT SUM(file_size) FROM attachments WHERE space_id = ? AND deleted_at IS NULL), 0) + ? <= ?`,
     ).run(
       id, authContext.spaceId, entityType, entityId, normalizedFileName, declaredMimeType, realMimeType,
-      buffer.length, storagePath, authContext.userId, authContext.spaceId, buffer.length, limits.maxSpace,
+      buffer.length, storagePath, authContext.userId, expiresAt, authContext.spaceId, buffer.length, limits.maxSpace,
     );
     if (reservation.changes !== 1) {
       throw new AppError(ErrorCodes.VALIDATION_ERROR, `Space quota exceeded for role ${role}.`, 400);
@@ -132,13 +171,16 @@ export class AttachmentService {
   async downloadAttachment(authContext, attachmentId) {
     requireAuthorization(authContext, Permissions.ATTACHMENTS_READ);
 
-    const att = this.db.prepare('SELECT * FROM attachments WHERE id = ? AND space_id = ? AND deleted_at IS NULL').get(attachmentId, authContext.spaceId);
+    const att = this._activeAttachment(attachmentId, authContext.spaceId);
     if (!att) {
       throw new AppError(ErrorCodes.NOT_FOUND, 'Attachment not found.', 404);
     }
 
     try {
       const buffer = await fs.readFile(att.storage_path);
+      if (!this._activeAttachment(attachmentId, authContext.spaceId)) {
+        throw new AppError(ErrorCodes.NOT_FOUND, 'Attachment not found.', 404);
+      }
       
       this.spaceIsolationService.logAudit({
         spaceId: authContext.spaceId,
@@ -156,5 +198,130 @@ export class AttachmentService {
     } catch (err) {
       throw new AppError(ErrorCodes.NOT_FOUND, 'Attachment file not found on disk.', 404);
     }
+  }
+
+  async setRetentionPolicy(authContext, { retentionDays }) {
+    requireAuthorization(authContext, Permissions.SPACE_UPDATE);
+    if (!Number.isInteger(retentionDays) || retentionDays < 1 || retentionDays > 3650) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, 'A retenção deve ser um número inteiro entre 1 e 3650 dias.', 400);
+    }
+    this.db.prepare(
+      `INSERT INTO attachment_retention_policies (space_id, retention_days, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(space_id) DO UPDATE SET retention_days = excluded.retention_days, updated_at = excluded.updated_at`,
+    ).run(authContext.spaceId, retentionDays, this._now());
+    return { retentionDays };
+  }
+
+  async createDownloadUrl(authContext, attachmentId, { expiresInSeconds } = {}) {
+    requireAuthorization(authContext, Permissions.ATTACHMENTS_READ);
+    if (!Number.isInteger(expiresInSeconds) || expiresInSeconds < 1 || expiresInSeconds > MAX_DOWNLOAD_URL_SECONDS) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, `A expiração da URL deve ser um inteiro entre 1 e ${MAX_DOWNLOAD_URL_SECONDS} segundos.`, 400);
+    }
+    this._assertDownloadUrlRateLimit(authContext);
+    const attachment = this._activeAttachment(attachmentId, authContext.spaceId);
+    if (!attachment) {
+      throw new AppError(ErrorCodes.NOT_FOUND, 'Attachment not found.', 404);
+    }
+
+    const token = randomBytes(32).toString('base64url');
+    const expiresAt = new Date(Date.now() + expiresInSeconds * 1000).toISOString();
+    this.db.prepare(
+      'INSERT INTO attachment_download_tokens (token_hash, attachment_id, space_id, created_by, expires_at) VALUES (?, ?, ?, ?, ?)',
+    ).run(this.hashDownloadToken(token), attachment.id, attachment.space_id, authContext.userId, expiresAt);
+    this.spaceIsolationService.logAudit({
+      spaceId: authContext.spaceId,
+      actorUserId: authContext.userId,
+      action: 'attachment.download_url',
+      entityType: 'attachments',
+      entityId: attachment.id,
+      newData: { expiresAt },
+    });
+    return {
+      downloadUrl: `/api/v1/attachments/${encodeURIComponent(attachment.id)}/download?token=${encodeURIComponent(token)}`,
+      expiresAt,
+    };
+  }
+
+  async downloadAttachmentByToken(attachmentId, token) {
+    if (typeof attachmentId !== 'string' || typeof token !== 'string' || token.length < 32) {
+      throw new AppError(ErrorCodes.NOT_FOUND, 'Attachment not found.', 404);
+    }
+    const now = this._now();
+    const tokenHash = this.hashDownloadToken(token);
+    const consumed = this.db.prepare(
+      `UPDATE attachment_download_tokens SET used_at = ?
+       WHERE token_hash = ? AND attachment_id = ? AND used_at IS NULL AND expires_at > ?
+         AND EXISTS (SELECT 1 FROM attachments WHERE id = ? AND deleted_at IS NULL AND (expires_at IS NULL OR expires_at > ?))`,
+    ).run(now, tokenHash, attachmentId, now, attachmentId, now);
+    if (consumed.changes !== 1) {
+      throw new AppError(ErrorCodes.NOT_FOUND, 'Attachment not found.', 404);
+    }
+    const tokenRecord = this.db.prepare('SELECT space_id, created_by FROM attachment_download_tokens WHERE token_hash = ?').get(tokenHash);
+    const attachment = this._activeAttachment(attachmentId, tokenRecord.space_id);
+    if (!attachment) {
+      throw new AppError(ErrorCodes.NOT_FOUND, 'Attachment not found.', 404);
+    }
+    try {
+      const buffer = await fs.readFile(attachment.storage_path);
+      if (!this._activeAttachment(attachmentId, tokenRecord.space_id)) {
+        throw new AppError(ErrorCodes.NOT_FOUND, 'Attachment not found.', 404);
+      }
+      this.spaceIsolationService.logAudit({
+        spaceId: attachment.space_id,
+        actorUserId: tokenRecord.created_by,
+        action: 'attachment.download',
+        entityType: 'attachments',
+        entityId: attachment.id,
+        newData: { via: 'temporary_url' },
+      });
+      return { buffer, mimeType: attachment.real_mime_type, fileName: attachment.file_name };
+    } catch {
+      throw new AppError(ErrorCodes.NOT_FOUND, 'Attachment file not found on disk.', 404);
+    }
+  }
+
+  async deleteAttachment(authContext, attachmentId, { hardDelete = false } = {}) {
+    requireAuthorization(authContext, Permissions.ATTACHMENTS_WRITE);
+    const attachment = this._activeAttachment(attachmentId, authContext.spaceId);
+    if (!attachment) {
+      throw new AppError(ErrorCodes.NOT_FOUND, 'Attachment not found.', 404);
+    }
+    const now = this._now();
+    this.db.prepare('UPDATE attachments SET deleted_at = ? WHERE id = ? AND space_id = ? AND deleted_at IS NULL').run(now, attachment.id, authContext.spaceId);
+    this.db.prepare('DELETE FROM attachment_download_tokens WHERE attachment_id = ?').run(attachment.id);
+    this.spaceIsolationService.logAudit({
+      spaceId: authContext.spaceId,
+      actorUserId: authContext.userId,
+      action: hardDelete ? 'attachment.hard_delete' : 'attachment.delete',
+      entityType: 'attachments',
+      entityId: attachment.id,
+    });
+    if (hardDelete) {
+      await fs.rm(attachment.storage_path, { force: true });
+      this.db.prepare('DELETE FROM attachments WHERE id = ? AND space_id = ?').run(attachment.id, authContext.spaceId);
+    }
+    return { id: attachment.id, deleted: true, hardDeleted: hardDelete };
+  }
+
+  async purgeExpiredAttachments(authContext) {
+    requireAuthorization(authContext, Permissions.SPACE_UPDATE);
+    const now = this._now();
+    const expired = this.db.prepare(
+      'SELECT * FROM attachments WHERE space_id = ? AND deleted_at IS NULL AND expires_at IS NOT NULL AND expires_at <= ?',
+    ).all(authContext.spaceId, now);
+    for (const attachment of expired) {
+      this.db.prepare('UPDATE attachments SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL').run(now, attachment.id);
+      this.db.prepare('DELETE FROM attachment_download_tokens WHERE attachment_id = ?').run(attachment.id);
+      await fs.rm(attachment.storage_path, { force: true });
+      this.db.prepare('DELETE FROM attachments WHERE id = ?').run(attachment.id);
+      this.spaceIsolationService.logAudit({
+        spaceId: authContext.spaceId,
+        actorUserId: authContext.userId,
+        action: 'attachment.expire',
+        entityType: 'attachments',
+        entityId: attachment.id,
+      });
+    }
+    return { purged: expired.length };
   }
 }

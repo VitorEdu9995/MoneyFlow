@@ -3,6 +3,27 @@ import { AppError, ErrorCodes, errorResponse, successResponse } from '../domain/
 export async function executeMcpHttpRequest(gateway, { method, path, body, authContext }) {
   const context = authContext || {};
   try {
+    const url = new URL(path, 'http://moneyflow.local');
+    const temporaryDownload = url.pathname.match(/^\/api\/v1\/attachments\/([^/]+)\/download$/);
+    if (method === 'GET' && temporaryDownload) {
+      const token = url.searchParams.get('token');
+      if (!gateway.attachmentService || !token) {
+        throw new AppError(ErrorCodes.NOT_FOUND, 'Attachment not found.', 404);
+      }
+      const attachment = await gateway.attachmentService.downloadAttachmentByToken(
+        decodeURIComponent(temporaryDownload[1]),
+        token,
+      );
+      return {
+        status: 200,
+        body: successResponse({
+          content_base64: attachment.buffer.toString('base64'),
+          mime_type: attachment.mimeType,
+          file_name: attachment.fileName,
+          file_size: attachment.buffer.length,
+        }),
+      };
+    }
     if (method !== 'POST' || path !== '/api/v1/mcp/execute') {
       throw new AppError(ErrorCodes.METHOD_NOT_ALLOWED, 'Endpoint MCP disponível apenas em POST /api/v1/mcp/execute.', 405);
     }

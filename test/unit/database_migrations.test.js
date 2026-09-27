@@ -16,6 +16,7 @@ test('Migrations estruturais sobem em banco vazio com integridade e sem dados au
     '006_attachments',
     '007_financial_goals',
     '008_protect_piggy_bank_internal_transactions',
+    '009_attachment_lifecycle',
   ]);
 
   // Nenhuma tabela possui dados inseridos automaticamente
@@ -53,6 +54,7 @@ test('Migrations são reversíveis via rollback explícito', () => {
   runMigrations(db);
 
   // Reversão explícita na ordem de dependência (008 a 001).
+  rollbackMigration(db, '009_attachment_lifecycle');
   rollbackMigration(db, '008_protect_piggy_bank_internal_transactions');
   rollbackMigration(db, '007_financial_goals');
   rollbackMigration(db, '006_attachments');

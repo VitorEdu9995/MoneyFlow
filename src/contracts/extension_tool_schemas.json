@@ -216,6 +216,41 @@
       "required": ["attachment_id"]
     }
   },
+  "anexos_download_url": {
+    "name": "anexos_download_url",
+    "description": "Gera URL temporária, de uso único e com expiração obrigatória para download de anexo do espaço autenticado.",
+    "rules": "O token não é registrado em auditoria, expira em no máximo 15 minutos e é invalidado por exclusão ou expiração do anexo.",
+    "readOnly": true,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "attachment_id": { "type": "string" },
+        "expires_in_seconds": { "type": "integer" }
+      },
+      "required": ["attachment_id", "expires_in_seconds"]
+    }
+  },
+  "anexos_delete": {
+    "name": "anexos_delete",
+    "description": "Exclui um anexo do espaço autenticado, logicamente por padrão ou fisicamente quando solicitado.",
+    "rules": "A exclusão invalida imediatamente URLs temporárias e impede novo acesso ao conteúdo.",
+    "readOnly": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "attachment_id": { "type": "string" },
+        "hard_delete": { "type": "boolean" }
+      },
+      "required": ["attachment_id"]
+    }
+  },
+  "anexos_purge_expired": {
+    "name": "anexos_purge_expired",
+    "description": "Remove definitivamente anexos expirados do espaço autenticado segundo a política de retenção.",
+    "rules": "Exige permissão de atualização do espaço e registra cada expiração na auditoria.",
+    "readOnly": false,
+    "inputSchema": { "type": "object", "properties": {}, "required": [] }
+  },
   "metas_create": {
     "name": "metas_create", "description": "Cria meta financeira, com cofrinho exclusivo quando a meta for de poupança.", "readOnly": false,
     "inputSchema": { "type": "object", "properties": { "name": {"type":"string"}, "goal_type": {"type":"string","enum":["savings","spending"]}, "target_amount": {"type":"number"}, "category_id": {"type":"string"}, "start_date": {"type":"string"}, "deadline": {"type":"string"}, "recurrence_rule": {"type":"string"} }, "required": ["name","goal_type","target_amount","start_date","deadline"] }
