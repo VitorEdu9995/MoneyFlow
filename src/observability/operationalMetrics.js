@@ -5,6 +5,9 @@ const DEFAULT_ALERT_THRESHOLDS = Object.freeze({
   authorization: 10,
   redaction: 20,
   storageFailure: 1,
+  migrationFailure: 1,
+  queueFailure: 1,
+  highLatency: 10,
 });
 
 function asNonNegativeInteger(value) {
@@ -39,7 +42,7 @@ export class OperationalMetrics {
     if (!Number.isFinite(threshold) || threshold < 1 || count !== threshold) return;
     const alert = {
       type,
-      severity: type === 'idor' || type === 'storage_failure' ? 'high' : 'warning',
+      severity: ['idor', 'storage_failure', 'migration_failure', 'queue_failure'].includes(type) ? 'high' : 'warning',
       count,
       threshold,
       timestamp: new Date(this.now()).toISOString(),
@@ -60,6 +63,20 @@ export class OperationalMetrics {
     const latency = Math.max(0, Number(latencyMs) || 0);
     this.api.latencyTotal += latency;
     this.api.latencyMax = Math.max(this.api.latencyMax, latency);
+    if (latency >= (this.thresholds.latencyMsLimit || 2000)) {
+      this.highLatencies = (this.highLatencies || 0) + 1;
+      this._emitAlert('high_latency', this.highLatencies);
+    }
+  }
+
+  recordMigrationFailure() {
+    this.migrationFailures = (this.migrationFailures || 0) + 1;
+    this._emitAlert('migration_failure', this.migrationFailures);
+  }
+
+  recordQueueFailure() {
+    this.queueFailures = (this.queueFailures || 0) + 1;
+    this._emitAlert('queue_failure', this.queueFailures);
   }
 
   recordRateLimit({ scope = 'user_ip' } = {}) {
@@ -115,6 +132,11 @@ export class OperationalMetrics {
       auditEvents: this.auditEvents,
       redactions: this.redactions,
       storage: { ...this.storage },
+      operations: {
+        migrationFailures: this.migrationFailures || 0,
+        queueFailures: this.queueFailures || 0,
+        highLatencies: this.highLatencies || 0,
+      },
       alerts: this.alerts.map((alert) => ({ ...alert })),
     };
   }
