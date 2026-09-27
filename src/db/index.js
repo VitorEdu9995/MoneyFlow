@@ -15,6 +15,7 @@ import * as importRealMvpFormat from './migrations/004_import_real_mvp_format.js
 import * as auditLogAppendOnly from './migrations/005_audit_log_append_only.js';
 import * as attachments from './migrations/006_attachments.js';
 import * as financialGoals from './migrations/007_financial_goals.js';
+import * as protectPiggyBankInternalTransactions from './migrations/008_protect_piggy_bank_internal_transactions.js';
 
 export const MIGRATIONS = [
   { id: '001_initial_schema', module: initialSchema },
@@ -24,6 +25,7 @@ export const MIGRATIONS = [
   { id: '005_audit_log_append_only', module: auditLogAppendOnly },
   { id: '006_attachments', module: attachments },
   { id: '007_financial_goals', module: financialGoals },
+  { id: '008_protect_piggy_bank_internal_transactions', module: protectPiggyBankInternalTransactions },
 ];
 
 /**

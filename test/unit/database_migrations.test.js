@@ -15,6 +15,7 @@ test('Migrations estruturais sobem em banco vazio com integridade e sem dados au
     '005_audit_log_append_only',
     '006_attachments',
     '007_financial_goals',
+    '008_protect_piggy_bank_internal_transactions',
   ]);
 
   // Nenhuma tabela possui dados inseridos automaticamente
@@ -51,7 +52,8 @@ test('Migrations são reversíveis via rollback explícito', () => {
   const db = createDatabase(':memory:');
   runMigrations(db);
 
-  // Reversão explícita na ordem de dependência (007 a 001).
+  // Reversão explícita na ordem de dependência (008 a 001).
+  rollbackMigration(db, '008_protect_piggy_bank_internal_transactions');
   rollbackMigration(db, '007_financial_goals');
   rollbackMigration(db, '006_attachments');
   rollbackMigration(db, '005_audit_log_append_only');
@@ -99,4 +101,13 @@ test('Migration 004 amplia import_batches (imported_cards/imported_payments) e i
 
   const row = db.prepare('SELECT entity_type FROM import_entities WHERE id = ?').get('e-1');
   assert.equal(row.entity_type, 'credit_cards');
+});
+
+test('Migration 008 adiciona marcador imutável para transferências internas de cofrinho', () => {
+  const db = createDatabase(':memory:');
+  runMigrations(db);
+
+  const marker = db.prepare('PRAGMA table_info(transactions)').all().find((column) => column.name === 'is_piggy_bank_internal');
+  assert.equal(marker?.notnull, 1);
+  assert.equal(marker?.dflt_value, '0');
 });

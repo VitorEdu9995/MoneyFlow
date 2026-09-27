@@ -15,6 +15,10 @@ import { AppError, ErrorCodes } from '../domain/envelope.js';
 import { Roles, requireAuthorization, Permissions } from '../domain/authorization.js';
 import { logger } from '../utils/logger.js';
 
+// Token não serializável: somente este módulo pode marcar uma transferência
+// como interna de cofrinho; argumentos recebidos pelo MCP nunca o produzem.
+const PIGGY_BANK_INTERNAL_TRANSFER = Symbol('piggy-bank-internal-transfer');
+
 // =========================================================================
 // UTILITÁRIOS DE DATA (FASE 2 - ECO-62)
 // Todas as datas trafegam como string 'YYYY-MM-DD'. Meses são sempre
@@ -629,9 +633,14 @@ export class SpaceIsolationService {
       observation = null,
       tags = [],
       _allowPiggy = false,
+      internalTransferToken = null,
     },
   ) {
     requireAuthorization(authContext, Permissions.TRANSACTIONS_WRITE);
+    const isPiggyBankInternal = internalTransferToken === PIGGY_BANK_INTERNAL_TRANSFER;
+    if (_allowPiggy !== isPiggyBankInternal) {
+      throw new AppError(ErrorCodes.FORBIDDEN, 'Movimentação interna de cofrinho inválida.', 403);
+    }
 
     // Validação de Cross-Space em todas as FKs
     if (accountId) {
@@ -690,8 +699,8 @@ export class SpaceIsolationService {
         .prepare(
           `INSERT INTO transactions (
             id, space_id, type, description, amount, account_id, credit_card_id,
-            category_id, destination_account_id, transaction_date, observation, tags
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            category_id, destination_account_id, transaction_date, observation, tags, is_piggy_bank_internal
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           id,
@@ -706,6 +715,7 @@ export class SpaceIsolationService {
           transactionDate,
           observation,
           JSON.stringify(tags),
+          isPiggyBankInternal ? 1 : 0,
         );
 
       // Recálculo atômico de saldo: mesma unidade de trabalho do INSERT (via
@@ -718,7 +728,7 @@ export class SpaceIsolationService {
         action: 'transaction.create',
         entityType: 'transactions',
         entityId: id,
-        newData: { id, type, description, amount, transactionDate },
+        newData: { id, type, description, amount, transactionDate, isPiggyBankInternal },
       });
 
       return this.getTransaction(authContext, id);
@@ -737,12 +747,35 @@ export class SpaceIsolationService {
   }
 
   /**
+   * Impede alterações parciais de transferências que movimentam um cofrinho.
+   * A consulta de legado mantém protegidos registros criados antes do marcador.
+   */
+  _assertTransactionCanBeMutated(transaction) {
+    const isLegacyPiggyBankInternal = this.db
+      .prepare(
+        `SELECT 1
+         FROM transfers transfer
+         JOIN accounts source_account ON source_account.id = transfer.source_account_id
+         JOIN accounts destination_account ON destination_account.id = transfer.destination_account_id
+         WHERE transfer.space_id = ?
+           AND (transfer.source_transaction_id = ? OR transfer.destination_transaction_id = ?)
+           AND (source_account.is_piggy_bank = 1 OR destination_account.is_piggy_bank = 1)`,
+      )
+      .get(transaction.space_id, transaction.id, transaction.id);
+
+    if (transaction.is_piggy_bank_internal || isLegacyPiggyBankInternal) {
+      throw new AppError(ErrorCodes.FORBIDDEN, 'Transações internas de cofrinho só podem ser movimentadas por aporte ou saque.', 403);
+    }
+  }
+
+  /**
    * Atualiza campos permitidos de uma transação existente, revalidando
    * qualquer nova referência entre espaços (ex: trocar categoria).
    */
   updateTransaction(authContext, transactionId, updates = {}) {
     requireAuthorization(authContext, Permissions.TRANSACTIONS_WRITE);
     const existing = this.getTransaction(authContext, transactionId);
+    this._assertTransactionCanBeMutated(existing);
 
     if (updates.categoryId) {
       const cat = this.db.prepare('SELECT space_id FROM categories WHERE id = ?').get(updates.categoryId);
@@ -805,6 +838,7 @@ export class SpaceIsolationService {
   deleteTransaction(authContext, transactionId) {
     requireAuthorization(authContext, Permissions.TRANSACTIONS_WRITE);
     const existing = this.getTransaction(authContext, transactionId);
+    this._assertTransactionCanBeMutated(existing);
 
     return this._runAtomic(() => {
       this.db
@@ -834,6 +868,7 @@ export class SpaceIsolationService {
   setTransactionPaid(authContext, { transactionId, paid = true, effectiveDate = null }) {
     requireAuthorization(authContext, Permissions.TRANSACTIONS_WRITE);
     const existing = this.getTransaction(authContext, transactionId);
+    this._assertTransactionCanBeMutated(existing);
 
     const paidStatus = paid ? 'paid' : 'unpaid';
     const effective = paid ? effectiveDate || existing.transaction_date : null;
@@ -931,11 +966,12 @@ export class SpaceIsolationService {
 
       for (const transactionId of transactionIds) {
         const tx = this.db
-          .prepare('SELECT id FROM transactions WHERE id = ? AND space_id = ? AND deleted_at IS NULL')
+          .prepare('SELECT * FROM transactions WHERE id = ? AND space_id = ? AND deleted_at IS NULL')
           .get(transactionId, authContext.spaceId);
         if (!tx) {
           throw new AppError(ErrorCodes.NOT_FOUND, `Transação '${transactionId}' não encontrada.`, 404);
         }
+        this._assertTransactionCanBeMutated(tx);
         for (const tagId of tagIds) {
           insertLink.run(authContext.spaceId, transactionId, tagId);
         }
@@ -967,9 +1003,16 @@ export class SpaceIsolationService {
 
   createTransfer(
     authContext,
-    { id = randomUUID(), sourceAccountId, destinationAccountId, amount, transferDate, description = 'Transferência entre contas', _allowPiggy = false },
+    {
+      id = randomUUID(), sourceAccountId, destinationAccountId, amount, transferDate,
+      description = 'Transferência entre contas', _allowPiggy = false, internalTransferToken = null,
+    },
   ) {
     requireAuthorization(authContext, Permissions.TRANSACTIONS_WRITE);
+    const isPiggyBankInternal = internalTransferToken === PIGGY_BANK_INTERNAL_TRANSFER;
+    if (_allowPiggy !== isPiggyBankInternal) {
+      throw new AppError(ErrorCodes.FORBIDDEN, 'Movimentação interna de cofrinho inválida.', 403);
+    }
 
     if (!sourceAccountId || !destinationAccountId) {
       throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Conta de origem e de destino são obrigatórias.', 400);
@@ -1001,6 +1044,19 @@ export class SpaceIsolationService {
       throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Use cofrinho_deposit para depositar em uma conta-cofrinho.', 400);
     }
 
+    if (isPiggyBankInternal) {
+      if (Boolean(source.is_piggy_bank) === Boolean(destination.is_piggy_bank)) {
+        throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Transferência interna deve envolver exatamente uma conta-cofrinho.', 400);
+      }
+      const piggyBankAccountId = source.is_piggy_bank ? source.id : destination.id;
+      const piggyBank = this.db
+        .prepare('SELECT id FROM piggy_banks WHERE account_id = ? AND space_id = ?')
+        .get(piggyBankAccountId, authContext.spaceId);
+      if (!piggyBank) {
+        throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Conta-cofrinho interna inválida.', 400);
+      }
+    }
+
     if (source.currency !== destination.currency) {
       throw new AppError(
         ErrorCodes.CURRENCY_MISMATCH,
@@ -1022,6 +1078,7 @@ export class SpaceIsolationService {
         destinationAccountId,
         transactionDate: transferDate,
         _allowPiggy,
+        internalTransferToken,
       });
 
       this.createTransaction(authContext, {
@@ -1032,6 +1089,7 @@ export class SpaceIsolationService {
         accountId: destinationAccountId,
         transactionDate: transferDate,
         _allowPiggy,
+        internalTransferToken,
       });
 
       this.db
@@ -2992,7 +3050,15 @@ export class SpaceIsolationService {
     if (direction === 'deposit' && other.current_balance < amount) throw new AppError(ErrorCodes.INSUFFICIENT_FUNDS, 'Saldo insuficiente na conta de origem.', 409);
     const sourceAccountId = direction === 'deposit' ? other.id : bank.account_id;
     const destinationAccountId = direction === 'deposit' ? bank.account_id : other.id;
-    const transfer = this.createTransfer(authContext, { sourceAccountId, destinationAccountId, amount, transferDate: date, description: description || (direction === 'deposit' ? `Aporte em ${goal.name}` : `Saque de ${goal.name}`), _allowPiggy: true });
+    const transfer = this.createTransfer(authContext, {
+      sourceAccountId,
+      destinationAccountId,
+      amount,
+      transferDate: date,
+      description: description || (direction === 'deposit' ? `Aporte em ${goal.name}` : `Saque de ${goal.name}`),
+      _allowPiggy: true,
+      internalTransferToken: PIGGY_BANK_INTERNAL_TRANSFER,
+    });
     this.logAudit({ spaceId: authContext.spaceId, actorUserId: authContext.userId, action: `piggy_bank.${direction}`, entityType: 'piggy_banks', entityId: bank.id, newData: { goalId, amount, transferId: transfer.id } });
     return { transfer, goal: this.getGoalProgress(authContext, goalId) };
   }
