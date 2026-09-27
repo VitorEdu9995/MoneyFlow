@@ -29,7 +29,7 @@ const MIME_TYPES = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
-  '.svg': 'image/svg+xml',
+  '.svg': 'image/svg+xml; charset=utf-8',
   '.ico': 'image/x-icon',
   '.webp': 'image/webp',
 };
@@ -38,9 +38,11 @@ if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-// 1. Inicializa SQLite e Migrações
+// 1. Inicializa SQLite, WAL e Busy Timeout
 logger.info('Iniciando banco de dados SQLite...', { dbPath: DB_PATH });
 const db = createDatabase(DB_PATH);
+db.exec('PRAGMA busy_timeout = 5000;'); // Espera até 5s em concorrência para evitar SQLITE_BUSY
+
 const appliedMigrations = runMigrations(db);
 if (appliedMigrations.length > 0) {
   logger.info('Migrações aplicadas com sucesso:', { count: appliedMigrations.length, migrations: appliedMigrations });
@@ -219,7 +221,7 @@ if (existingAccounts.length === 0) {
   }
 }
 
-const rateLimiter = createRateLimiter({ userIpLimit: 150, windowMs: 60000 });
+const rateLimiter = createRateLimiter({ userIpLimit: 200, windowMs: 60000 });
 
 // 8. Cria o Servidor HTTP
 const server = http.createServer((req, res) => {
@@ -238,26 +240,28 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // Rate Limiting
+  // Safe URL Parsing independente de cabeçalho Host
+  const url = new URL(req.url || '/', 'http://127.0.0.1');
+
+  // 8.1 Health check endpoints (isento de rate limiting para não bloquear liveness probes)
+  if (req.method === 'GET' && (url.pathname === '/api/v1/health' || url.pathname === '/healthz')) {
+    const healthData = JSON.stringify({
+      status: 'ok',
+      uptime: Math.floor(process.uptime()),
+      timestamp: new Date().toISOString(),
+      db: 'connected',
+      version: '0.1.0',
+    });
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Length', Buffer.byteLength(healthData, 'utf8'));
+    res.end(healthData);
+    return;
+  }
+
+  // Rate Limiting para endpoints de negócio e API
   rateLimiter(req, res, async () => {
     try {
-      const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
-
-      // 8.1 Health check endpoints
-      if (req.method === 'GET' && (url.pathname === '/api/v1/health' || url.pathname === '/healthz')) {
-        res.setHeader('Content-Type', 'application/json');
-        res.statusCode = 200;
-        res.end(
-          JSON.stringify({
-            status: 'ok',
-            uptime: Math.floor(process.uptime()),
-            timestamp: new Date().toISOString(),
-            db: 'connected',
-          }),
-        );
-        return;
-      }
-
       // 8.2 Resolução Dinâmica de Usuário
       let currentUser = defaultUser;
       const authHeader = req.headers['authorization'];
@@ -310,22 +314,23 @@ const server = http.createServer((req, res) => {
           )
           .all(currentUser.id);
 
-        res.setHeader('Content-Type', 'application/json');
-        res.statusCode = 200;
-        res.end(
-          JSON.stringify({
-            ok: true,
-            data: {
-              user: {
-                id: currentUser.id,
-                name: currentUser.name,
-                email: currentUser.email,
-              },
-              spaces: userSpaces.length > 0 ? userSpaces : [{ id: personalSpace.id, name: 'Pessoal' }],
-              activeSpaceId: targetSpaceId,
+        const authBody = JSON.stringify({
+          ok: true,
+          data: {
+            user: {
+              id: currentUser.id,
+              name: currentUser.name,
+              email: currentUser.email,
             },
-          }),
-        );
+            spaces: userSpaces.length > 0 ? userSpaces : [{ id: personalSpace.id, name: 'Pessoal' }],
+            activeSpaceId: targetSpaceId,
+          },
+        });
+
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.setHeader('Content-Length', Buffer.byteLength(authBody, 'utf8'));
+        res.end(authBody);
         return;
       }
 
@@ -337,7 +342,9 @@ const server = http.createServer((req, res) => {
         try {
           const logoAsset = await catalogService.getLogoAssetContent(assetId);
           res.statusCode = 200;
-          res.setHeader('Content-Type', logoAsset.mimeType);
+          const mime = logoAsset.format === 'svg' ? 'image/svg+xml; charset=utf-8' : logoAsset.mimeType;
+          res.setHeader('Content-Type', mime);
+          res.setHeader('Content-Length', logoAsset.buffer.length);
           res.setHeader('ETag', `"${logoAsset.sha256}"`);
           res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
           res.end(logoAsset.buffer);
@@ -357,7 +364,9 @@ const server = http.createServer((req, res) => {
                 }
                 fs.writeFileSync(fullPath, buffer);
                 res.statusCode = 200;
-                res.setHeader('Content-Type', asset.mime_type);
+                const mime = asset.format === 'svg' ? 'image/svg+xml; charset=utf-8' : asset.mime_type;
+                res.setHeader('Content-Type', mime);
+                res.setHeader('Content-Length', buffer.length);
                 res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
                 res.end(buffer);
                 return;
@@ -365,8 +374,10 @@ const server = http.createServer((req, res) => {
             } catch {}
           }
           res.statusCode = 404;
-          res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify({ ok: false, error: { code: 'NOT_FOUND', message: 'Logo não encontrado.' } }));
+          const errBody = JSON.stringify({ ok: false, error: { code: 'NOT_FOUND', message: 'Logo não encontrado.' } });
+          res.setHeader('Content-Type', 'application/json; charset=utf-8');
+          res.setHeader('Content-Length', Buffer.byteLength(errBody, 'utf8'));
+          res.end(errBody);
           return;
         }
       }
@@ -382,13 +393,13 @@ const server = http.createServer((req, res) => {
             totalBytes += chunk.length;
             if (totalBytes > MAX_PAYLOAD_BYTES) {
               res.statusCode = 413;
-              res.setHeader('Content-Type', 'application/json');
-              res.end(
-                JSON.stringify({
-                  ok: false,
-                  error: { code: 'PAYLOAD_TOO_LARGE', message: 'Payload excede o limite máximo permitido.' },
-                }),
-              );
+              const errPayload = JSON.stringify({
+                ok: false,
+                error: { code: 'PAYLOAD_TOO_LARGE', message: 'Payload excede o limite máximo permitido de 28MB.' },
+              });
+              res.setHeader('Content-Type', 'application/json; charset=utf-8');
+              res.setHeader('Content-Length', Buffer.byteLength(errPayload, 'utf8'));
+              res.end(errPayload);
               req.destroy();
               return;
             }
@@ -401,8 +412,10 @@ const server = http.createServer((req, res) => {
               body = JSON.parse(rawBody);
             } catch {
               res.statusCode = 400;
-              res.setHeader('Content-Type', 'application/json');
-              res.end(JSON.stringify({ ok: false, error: { code: 'INVALID_JSON', message: 'JSON malformado.' } }));
+              const errJson = JSON.stringify({ ok: false, error: { code: 'INVALID_JSON', message: 'JSON malformado.' } });
+              res.setHeader('Content-Type', 'application/json; charset=utf-8');
+              res.setHeader('Content-Length', Buffer.byteLength(errJson, 'utf8'));
+              res.end(errJson);
               return;
             }
           }
@@ -415,6 +428,18 @@ const server = http.createServer((req, res) => {
           authContext,
         });
 
+        // Suporte a download de anexos binários via ?raw=1
+        const attachmentDownloadMatch = url.pathname.match(/^\/api\/v1\/attachments\/([^/]+)\/download$/);
+        if (req.method === 'GET' && attachmentDownloadMatch && url.searchParams.get('raw') === '1' && result.status === 200 && result.body?.data?.content_base64) {
+          const attBuffer = Buffer.from(result.body.data.content_base64, 'base64');
+          res.statusCode = 200;
+          res.setHeader('Content-Type', result.body.data.mime_type || 'application/octet-stream');
+          res.setHeader('Content-Length', attBuffer.length);
+          res.setHeader('Content-Disposition', `attachment; filename="${result.body.data.file_name}"`);
+          res.end(attBuffer);
+          return;
+        }
+
         res.statusCode = result.status;
         if (result.headers) {
           for (const [k, v] of Object.entries(result.headers)) {
@@ -422,26 +447,39 @@ const server = http.createServer((req, res) => {
           }
         }
         if (!res.getHeader('Content-Type')) {
-          res.setHeader('Content-Type', 'application/json');
+          res.setHeader('Content-Type', 'application/json; charset=utf-8');
         }
 
-        res.end(typeof result.body === 'string' ? result.body : JSON.stringify(result.body));
+        const responsePayload = typeof result.body === 'string' ? result.body : JSON.stringify(result.body);
+        res.setHeader('Content-Length', Buffer.byteLength(responsePayload, 'utf8'));
+        res.end(responsePayload);
         return;
       }
 
-      // 8.7 Servir Frontend Estático se buildado (dist)
+      // 8.7 Servir Frontend Estático se buildado (dist) com Defesa contra Path Traversal
       if (fs.existsSync(FRONTEND_DIST)) {
-        let filePath = path.join(FRONTEND_DIST, url.pathname === '/' ? 'index.html' : url.pathname);
-        if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
-          filePath = path.join(FRONTEND_DIST, 'index.html');
+        const sanitizedRelPath = (url.pathname === '/' ? '/index.html' : url.pathname).replace(/\0/g, '');
+        const targetPath = path.resolve(FRONTEND_DIST, '.' + sanitizedRelPath);
+
+        // Previne path traversal verificando se targetPath permanece dentro de FRONTEND_DIST
+        if (!targetPath.startsWith(FRONTEND_DIST)) {
+          res.statusCode = 403;
+          res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+          res.end('Acesso proibido.');
+          return;
         }
 
-        if (fs.existsSync(filePath)) {
-          const ext = path.extname(filePath).toLowerCase();
+        let fileToServe = targetPath;
+        if (!fs.existsSync(fileToServe) || fs.statSync(fileToServe).isDirectory()) {
+          fileToServe = path.join(FRONTEND_DIST, 'index.html');
+        }
+
+        if (fs.existsSync(fileToServe)) {
+          const ext = path.extname(fileToServe).toLowerCase();
           const contentType = MIME_TYPES[ext] || 'application/octet-stream';
           res.statusCode = 200;
           res.setHeader('Content-Type', contentType);
-          const stream = fs.createReadStream(filePath);
+          const stream = fs.createReadStream(fileToServe);
           stream.pipe(res);
           return;
         }
@@ -449,21 +487,23 @@ const server = http.createServer((req, res) => {
 
       // 8.8 Fallback Rota Não Encontrada
       res.statusCode = 404;
-      res.setHeader('Content-Type', 'application/json');
-      res.end(
-        JSON.stringify({
-          ok: false,
-          error: {
-            code: 'NOT_FOUND',
-            message: 'Endpoint não encontrado. Acesse /api/v1/health para verificar a saúde do servidor.',
-          },
-        }),
-      );
+      const notFoundBody = JSON.stringify({
+        ok: false,
+        error: {
+          code: 'NOT_FOUND',
+          message: 'Endpoint não encontrado. Acesse /api/v1/health para verificar a saúde do servidor.',
+        },
+      });
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.setHeader('Content-Length', Buffer.byteLength(notFoundBody, 'utf8'));
+      res.end(notFoundBody);
     } catch (err) {
       logger.error('Erro ao processar requisição HTTP:', err);
       res.statusCode = 500;
-      res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify({ ok: false, error: { code: 'INTERNAL_ERROR', message: err.message } }));
+      const errBody = JSON.stringify({ ok: false, error: { code: 'INTERNAL_ERROR', message: err.message } });
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.setHeader('Content-Length', Buffer.byteLength(errBody, 'utf8'));
+      res.end(errBody);
     }
   });
 });
@@ -477,6 +517,15 @@ server.on('error', (err) => {
     console.error('❌ Erro no servidor HTTP:', err);
   }
   process.exit(1);
+});
+
+// Captura de Exceções Globais Não Tratadas
+process.on('uncaughtException', (err) => {
+  logger.error('Exceção não tratada capturada no processo:', err);
+});
+
+process.on('unhandledRejection', (reason) => {
+  logger.error('Rejeição de Promise não tratada:', reason);
 });
 
 // Graceful Shutdown

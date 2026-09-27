@@ -250,7 +250,7 @@ export class InstitutionCatalogService {
       throw new AppError(ErrorCodes.NOT_FOUND, 'Asset de logo não encontrado.', 404);
     }
 
-    const filePath = path.join(this.storageDir, asset.storage_key);
+    let filePath = path.join(this.storageDir, asset.storage_key);
     try {
       const buffer = await fs.readFile(filePath);
       return {
@@ -261,6 +261,27 @@ export class InstitutionCatalogService {
         sourceUrl: asset.source_url,
       };
     } catch {
+      // Tenta caminhos alternativos resilientes (caso storageDir já seja a pasta de logos ou a pasta pai)
+      const altPaths = [
+        path.join(path.dirname(this.storageDir), asset.storage_key),
+        path.join(this.storageDir, asset.storage_key.replace(/^logos[/\\]/, '')),
+      ];
+
+      for (const altPath of altPaths) {
+        try {
+          const buffer = await fs.readFile(altPath);
+          return {
+            buffer,
+            mimeType: asset.mime_type,
+            format: asset.format,
+            sha256: asset.sha256,
+            sourceUrl: asset.source_url,
+          };
+        } catch {
+          // Continua para o próximo
+        }
+      }
+
       throw new AppError(ErrorCodes.NOT_FOUND, 'Arquivo de logo não encontrado no storage local.', 404);
     }
   }
