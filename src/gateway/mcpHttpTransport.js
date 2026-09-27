@@ -1,5 +1,7 @@
 import { AppError, ErrorCodes, errorResponse, successResponse } from '../domain/envelope.js';
 
+export const MAX_MCP_BODY_BYTES = 28 * 1024 * 1024;
+
 export async function executeMcpHttpRequest(gateway, { method, path, body, authContext }) {
   const context = authContext || {};
   try {
@@ -30,6 +32,9 @@ export async function executeMcpHttpRequest(gateway, { method, path, body, authC
     }
     if (!body || typeof body.toolName !== 'string' || typeof body.args !== 'object' || Array.isArray(body.args)) {
       throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Corpo MCP inválido: toolName e args são obrigatórios.', 400);
+    }
+    if (Buffer.byteLength(JSON.stringify(body), 'utf8') > MAX_MCP_BODY_BYTES) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Corpo MCP excede o limite permitido.', 413);
     }
 
     // O contexto vem do middleware autenticado do servidor, nunca do corpo MCP.

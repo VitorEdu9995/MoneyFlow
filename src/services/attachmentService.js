@@ -29,6 +29,12 @@ const DEFAULT_RETENTION_DAYS = 30;
 const MAX_DOWNLOAD_URL_SECONDS = 15 * 60;
 const DOWNLOAD_URL_RATE_LIMIT = 30;
 const DOWNLOAD_URL_RATE_WINDOW_MS = 60 * 1000;
+const ATTACHABLE_ENTITIES = Object.freeze({
+  transaction: 'transactions',
+  account: 'accounts',
+  credit_card: 'credit_cards',
+  category: 'categories',
+});
 
 export class AttachmentService {
   constructor(db, spaceIsolationService) {
@@ -105,6 +111,20 @@ export class AttachmentService {
     return `${baseName.slice(0, -extension.length)}${CANONICAL_EXTENSIONS[realMimeType]}`;
   }
 
+  _assertAttachableEntity(authContext, entityType, entityId) {
+    const table = ATTACHABLE_ENTITIES[entityType];
+    if (!table) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Tipo de entidade para anexo não permitido.', 400);
+    }
+    if (typeof entityId !== 'string' || entityId.length === 0) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Identificador da entidade para anexo é obrigatório.', 400);
+    }
+    const entity = this.db.prepare(`SELECT id FROM ${table} WHERE id = ? AND space_id = ?`).get(entityId, authContext.spaceId);
+    if (!entity) {
+      throw new AppError(ErrorCodes.NOT_FOUND, 'Entidade para anexo não encontrada.', 404);
+    }
+  }
+
   async uploadAttachment(authContext, buffer, { entityType, entityId, fileName, declaredMimeType }) {
     requireAuthorization(authContext, Permissions.ATTACHMENTS_WRITE);
 
@@ -126,6 +146,7 @@ export class AttachmentService {
     }
 
     const normalizedFileName = this._normalizeFileName(fileName, realMimeType);
+    this._assertAttachableEntity(authContext, entityType, entityId);
 
     await this._ensureUploadDir();
     const id = randomUUID();
