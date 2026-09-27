@@ -35,6 +35,10 @@ export const BATCH_LIMITS = {
   mass_manage_categories: 100,
 };
 
+// 20 MiB é o maior limite de arquivo aceito (papel owner). A checagem ocorre
+// antes da decodificação para não alocar buffers a partir de entrada arbitrária.
+export const MAX_ATTACHMENT_CONTENT_BASE64_LENGTH = Math.ceil((20 * 1024 * 1024) / 3) * 4;
+
 export class McpGateway {
   /**
    * @param {object} options
@@ -176,13 +180,11 @@ export class McpGateway {
       // 7. Roteamento e execução do handler correspondente
       const handler = this._getHandler(toolName);
       if (!handler) {
-        const result = {
-          status: 'ok',
-          isMockFixture: true,
-          tool: toolName,
-        };
-        logger.info(`Tool ${toolName} missing handler, returning stub`, { result });
-        return result;
+        throw new AppError(
+          ErrorCodes.NOT_IMPLEMENTED,
+          `Ferramenta '${toolName}' ainda não está implementada.`,
+          501,
+        );
       }
 
       const resultData = await handler.call(this, args, effectiveContext);
@@ -377,7 +379,12 @@ export class McpGateway {
     if (!this.attachmentService) {
       throw new AppError(ErrorCodes.INTERNAL_ERROR, 'Serviço de anexos indisponível.', 500);
     }
-    if (typeof args.content_base64 !== 'string' || !/^[A-Za-z0-9+/]*={0,2}$/.test(args.content_base64) || args.content_base64.length % 4 !== 0) {
+    if (
+      typeof args.content_base64 !== 'string'
+      || args.content_base64.length > MAX_ATTACHMENT_CONTENT_BASE64_LENGTH
+      || !/^[A-Za-z0-9+/]*={0,2}$/.test(args.content_base64)
+      || args.content_base64.length % 4 !== 0
+    ) {
       throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Conteúdo base64 inválido.', 400);
     }
     return this.attachmentService.uploadAttachment(authContext, Buffer.from(args.content_base64, 'base64'), {

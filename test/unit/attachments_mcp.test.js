@@ -6,6 +6,13 @@ import { SpaceIsolationService } from '../../src/services/spaceIsolationService.
 import { McpGateway } from '../../src/gateway/mcpGateway.js';
 import { executeMcpHttpRequest } from '../../src/gateway/mcpHttpTransport.js';
 
+function createTransaction(db, spaceId) {
+  const id = crypto.randomUUID();
+  db.prepare("INSERT INTO transactions (id, space_id, type, description, amount, transaction_date) VALUES (?, ?, 'expense', 'Anexo', 1, '2026-09-27')")
+    .run(id, spaceId);
+  return id;
+}
+
 test('MCP anexos: upload/download trafegam em base64, aplicam autorização e retornam envelope do gateway', async () => {
   const db = createDatabase(':memory:');
   runMigrations(db);
@@ -14,6 +21,7 @@ test('MCP anexos: upload/download trafegam em base64, aplicam autorização e re
   const space = service.createSpace({ name: 'S1', ownerUserId: owner.id });
   const context = service.resolveAuthContext({ userId: owner.id, spaceId: space.id });
   const gateway = new McpGateway({ service });
+  const entityId = createTransaction(db, space.id);
   const content = Buffer.from('%PDF-1.7\nconteudo').toString('base64');
 
   assert.ok(gateway.getToolNames().includes('anexos_upload'));
@@ -21,7 +29,7 @@ test('MCP anexos: upload/download trafegam em base64, aplicam autorização e re
 
   const upload = await gateway.executeTool('anexos_upload', {
     entity_type: 'transaction',
-    entity_id: 'transaction-1',
+    entity_id: entityId,
     file_name: 'nota.PDF',
     declared_mime_type: 'application/pdf',
     content_base64: content,
@@ -44,6 +52,7 @@ test('MCP HTTP: POST /api/v1/mcp/execute usa contexto server-side e envelope App
   const space = service.createSpace({ name: 'S1', ownerUserId: owner.id });
   const context = service.resolveAuthContext({ userId: owner.id, spaceId: space.id });
   const gateway = new McpGateway({ service });
+  const entityId = createTransaction(db, space.id);
   const content = Buffer.from('%PDF-1.7\ntransport').toString('base64');
 
   const response = await executeMcpHttpRequest(gateway, {
@@ -52,7 +61,7 @@ test('MCP HTTP: POST /api/v1/mcp/execute usa contexto server-side e envelope App
     body: {
       toolName: 'anexos_upload',
       args: {
-        entity_type: 'transaction', entity_id: 'tx-1', file_name: 'transport.pdf',
+        entity_type: 'transaction', entity_id: entityId, file_name: 'transport.pdf',
         declared_mime_type: 'application/pdf', content_base64: content,
       },
       authContext: { spaceId: 'não-confiável' },

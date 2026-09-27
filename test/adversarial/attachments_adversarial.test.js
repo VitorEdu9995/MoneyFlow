@@ -7,6 +7,16 @@ import { Roles } from '../../src/domain/authorization.js';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { McpGateway, MAX_ATTACHMENT_CONTENT_BASE64_LENGTH } from '../../src/gateway/mcpGateway.js';
+import { executeMcpHttpRequest, MAX_MCP_BODY_BYTES } from '../../src/gateway/mcpHttpTransport.js';
+
+function createAttachableTransaction(db, context) {
+  const id = randomUUID();
+  db.prepare(
+    "INSERT INTO transactions (id, space_id, type, description, amount, transaction_date) VALUES (?, ?, 'expense', 'Anexo', 1, '2026-09-27')",
+  ).run(id, context.spaceId);
+  return id;
+}
 
 async function setup() {
   const db = new DatabaseSync(':memory:');
@@ -31,7 +41,7 @@ async function setup() {
 }
 
 test('Attachment IDOR: Cannot access attachment from other space', async () => {
-  const { iso, att } = await setup();
+  const { db, iso, att } = await setup();
   const u1 = iso.createUser({ name: 'U1', email: 'u1@a.com' });
   const u2 = iso.createUser({ name: 'U2', email: 'u2@a.com' });
   const s1 = iso.createSpace({ name: 'S1', ownerUserId: u1.id });
@@ -44,7 +54,7 @@ test('Attachment IDOR: Cannot access attachment from other space', async () => {
 
   const res = await att.uploadAttachment(ctx1, buf, {
     entityType: 'transaction',
-    entityId: randomUUID(),
+    entityId: createAttachableTransaction(db, ctx1),
     fileName: 'test.pdf',
     declaredMimeType: 'application/pdf'
   });
@@ -106,7 +116,7 @@ test('Attachment audit redacts PII embedded in file names before persistence', a
 
   await att.uploadAttachment(context, pdf, {
     entityType: 'transaction',
-    entityId: randomUUID(),
+    entityId: createAttachableTransaction(db, context),
     fileName: `fatura-${cardNumber}.pdf`,
     declaredMimeType: 'application/pdf'
   });
@@ -126,13 +136,14 @@ test('Attachment quota: reserva atômica impede 21 uploads concorrentes de 5 MiB
   const ownerContext = iso.resolveAuthContext({ userId: owner.id, spaceId: space.id });
   iso.addMember(ownerContext, { targetUserId: editor.id, role: Roles.EDITOR });
   const context = iso.resolveAuthContext({ userId: editor.id, spaceId: space.id });
+  const entityId = createAttachableTransaction(db, context);
   const pdf = Buffer.alloc(5 * 1024 * 1024);
   Buffer.from('%PDF-1.7\n').copy(pdf);
 
   const outcomes = await Promise.allSettled(
     Array.from({ length: 21 }, (_, index) => att.uploadAttachment(context, pdf, {
       entityType: 'transaction',
-      entityId: randomUUID(),
+      entityId,
       fileName: `quota-${index}.pdf`,
       declaredMimeType: 'application/pdf',
     })),
@@ -147,6 +158,71 @@ test('Attachment quota: reserva atômica impede 21 uploads concorrentes de 5 MiB
   assert.equal(total, 100 * 1024 * 1024);
 
   await Promise.all(successful.map(({ value }) => fs.rm(path.join(process.cwd(), '.data', 'attachments', `${value.id}.pdf`), { force: true })));
+});
+
+test('Attachment upload hardening: rejeita base64 excessivo antes de decodificar e corpo MCP excessivo', async () => {
+  const { db, iso } = await setup();
+  const user = iso.createUser({ name: 'U1', email: 'dos@test.dev' });
+  const space = iso.createSpace({ name: 'S1', ownerUserId: user.id });
+  const context = iso.resolveAuthContext({ userId: user.id, spaceId: space.id });
+  const gateway = new McpGateway({ service: iso });
+  const entityId = createAttachableTransaction(db, context);
+  const oversizedBase64 = 'A'.repeat(MAX_ATTACHMENT_CONTENT_BASE64_LENGTH + 4);
+
+  await assert.rejects(
+    () => gateway.executeTool('anexos_upload', {
+      entity_type: 'transaction', entity_id: entityId, file_name: 'nota.pdf',
+      declared_mime_type: 'application/pdf', content_base64: oversizedBase64,
+    }, context),
+    (error) => error.code === 'VALIDATION_ERROR',
+  );
+
+  const response = await executeMcpHttpRequest(gateway, {
+    method: 'POST', path: '/api/v1/mcp/execute', authContext: context,
+    body: { toolName: 'list_accounts', args: { padding: 'x'.repeat(MAX_MCP_BODY_BYTES) } },
+  });
+  assert.equal(response.status, 413);
+  assert.equal(response.body.error.code, 'VALIDATION_ERROR');
+});
+
+test('Attachment upload hardening: rejeita tipo não permitido, entidade ausente e referência de outro espaço', async () => {
+  const { db, iso, att } = await setup();
+  const owner = iso.createUser({ name: 'Owner', email: 'owner-entity@test.dev' });
+  const other = iso.createUser({ name: 'Other', email: 'other-entity@test.dev' });
+  const space = iso.createSpace({ name: 'S1', ownerUserId: owner.id });
+  const otherSpace = iso.createSpace({ name: 'S2', ownerUserId: other.id });
+  const context = iso.resolveAuthContext({ userId: owner.id, spaceId: space.id });
+  const otherContext = iso.resolveAuthContext({ userId: other.id, spaceId: otherSpace.id });
+  const pdf = Buffer.from('%PDF-1.7\nconteúdo');
+  const foreignId = createAttachableTransaction(db, otherContext);
+
+  await assert.rejects(
+    () => att.uploadAttachment(context, pdf, { entityType: 'user', entityId: foreignId, fileName: 'nota.pdf', declaredMimeType: 'application/pdf' }),
+    (error) => error.code === 'VALIDATION_ERROR',
+  );
+  await assert.rejects(
+    () => att.uploadAttachment(context, pdf, { entityType: 'transaction', entityId: randomUUID(), fileName: 'nota.pdf', declaredMimeType: 'application/pdf' }),
+    (error) => error.code === 'NOT_FOUND',
+  );
+  await assert.rejects(
+    () => att.uploadAttachment(context, pdf, { entityType: 'transaction', entityId: foreignId, fileName: 'nota.pdf', declaredMimeType: 'application/pdf' }),
+    (error) => error.code === 'NOT_FOUND',
+  );
+});
+
+test('Extension tools sem handler retornam erro estável, sem fixture de sucesso', async () => {
+  const { iso } = await setup();
+  const user = iso.createUser({ name: 'U1', email: 'extension-handler@test.dev' });
+  const space = iso.createSpace({ name: 'S1', ownerUserId: user.id });
+  const context = iso.resolveAuthContext({ userId: user.id, spaceId: space.id });
+  const gateway = new McpGateway({ service: iso });
+
+  await assert.rejects(
+    () => gateway.executeTool('create_attribute_definition', {
+      target_type: 'transaction', name: 'Teste', slug: 'teste', data_type: 'text',
+    }, context),
+    (error) => error.code === 'NOT_IMPLEMENTED' && error.status === 501,
+  );
 });
 
 test('Attachment MIME validation: assinatura válida com extensão não permitida é rejeitada', async () => {
