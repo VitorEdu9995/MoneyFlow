@@ -340,6 +340,15 @@ export class McpGateway {
       // 6. Anexos privados
       anexos_upload: this._handleAttachmentUpload,
       anexos_download: this._handleAttachmentDownload,
+
+      // 7. Metas financeiras e cofrinhos
+      metas_create: this._handleMetasCreate,
+      metas_update: this._handleMetasUpdate,
+      metas_delete: this._handleMetasDelete,
+      list_metas: this._handleListMetas,
+      get_goal_progress: this._handleGetGoalProgress,
+      cofrinho_deposit: this._handleCofrinhoDeposit,
+      cofrinho_withdraw: this._handleCofrinhoWithdraw,
     };
 
     return handlers[toolName];
@@ -691,13 +700,14 @@ export class McpGateway {
     // Caixa (paid_status = 'paid' por effective_date ou pagamento de fatura card_payment)
     const cashRows = this.service.db
       .prepare(
-        `SELECT type, SUM(amount) as total FROM transactions
-         WHERE space_id = ? AND deleted_at IS NULL
-           AND (paid_status = 'paid' OR type = 'card_payment')
-           AND COALESCE(effective_date, transaction_date) >= ?
-           AND COALESCE(effective_date, transaction_date) <= ?
-           AND type != 'transfer'
-         GROUP BY type`,
+        `SELECT t.type, SUM(t.amount) as total FROM transactions t
+         LEFT JOIN accounts a ON a.id = t.account_id
+         WHERE t.space_id = ? AND t.deleted_at IS NULL
+           AND (t.paid_status = 'paid' OR t.type = 'card_payment')
+           AND COALESCE(t.effective_date, t.transaction_date) >= ?
+           AND COALESCE(t.effective_date, t.transaction_date) <= ?
+           AND t.type != 'transfer' AND COALESCE(a.is_piggy_bank, 0) = 0
+         GROUP BY t.type`,
       )
       .all(authContext.spaceId, startDate, endDate);
 
@@ -708,15 +718,17 @@ export class McpGateway {
       else if (r.type === 'expense' || r.type === 'card_payment') cashExpense += r.total;
     }
 
-    // Maiores gastos (base lançamento, inclui compras de cartão)
-    const topExpenses = this.service.db
-      .prepare(
-        `SELECT description, amount, transaction_date, type FROM transactions
-         WHERE space_id = ? AND deleted_at IS NULL AND type IN ('expense', 'card_purchase')
-           AND transaction_date >= ? AND transaction_date <= ?
-         ORDER BY amount DESC LIMIT 5`,
-      )
-      .all(authContext.spaceId, startDate, endDate);
+    // Maiores gastos (base lançamento, inclui compras de cartão — exclui contas-cofrinho)
+        const topExpenses = this.service.db
+          .prepare(
+            `SELECT t.description, t.amount, t.transaction_date, t.type FROM transactions t
+             LEFT JOIN accounts a ON a.id = t.account_id
+             WHERE t.space_id = ? AND t.deleted_at IS NULL AND t.type IN ('expense', 'card_purchase')
+               AND t.transaction_date >= ? AND t.transaction_date <= ?
+               AND COALESCE(a.is_piggy_bank, 0) = 0
+             ORDER BY t.amount DESC LIMIT 5`,
+          )
+          .all(authContext.spaceId, startDate, endDate);
 
     return {
       period: { startDate, endDate },
@@ -972,7 +984,7 @@ export class McpGateway {
   _handleGetBalances(args, authContext) {
     requireAuthorization(authContext, Permissions.FINANCE_READ);
     const accounts = this.service.db
-      .prepare('SELECT id, name, current_balance, currency FROM accounts WHERE space_id = ? AND archived_at IS NULL')
+      .prepare('SELECT id, name, current_balance, currency FROM accounts WHERE space_id = ? AND archived_at IS NULL AND is_piggy_bank = 0')
       .all(authContext.spaceId);
 
     const invoices = this.service.db
@@ -1273,6 +1285,41 @@ export class McpGateway {
       accountId: args.account_id || null,
       categoryId: args.category_id || null,
     });
+  }
+
+  _handleMetasCreate(args, authContext) {
+    requireAuthorization(authContext, Permissions.GOALS_WRITE);
+    return this.service.createGoal(authContext, { name: args.name, goalType: args.goal_type, targetAmount: Math.round(args.target_amount * 100), categoryId: args.category_id || null, startDate: args.start_date, deadline: args.deadline, recurrenceRule: args.recurrence_rule || null });
+  }
+
+  _handleMetasUpdate(args, authContext) {
+    requireAuthorization(authContext, Permissions.GOALS_WRITE);
+    return this.service.updateGoal(authContext, args.id, { name: args.name, targetAmount: args.target_amount === undefined ? undefined : Math.round(args.target_amount * 100), categoryId: args.category_id, startDate: args.start_date, deadline: args.deadline, recurrenceRule: args.recurrence_rule });
+  }
+
+  _handleMetasDelete(args, authContext) {
+    requireAuthorization(authContext, Permissions.GOALS_WRITE);
+    return this.service.deleteGoal(authContext, args.id);
+  }
+
+  _handleListMetas(args, authContext) {
+    requireAuthorization(authContext, Permissions.FINANCE_READ);
+    return this.service.listGoals(authContext, { limit: args.limit, offset: args.offset, timezone: args.timezone });
+  }
+
+  _handleGetGoalProgress(args, authContext) {
+    requireAuthorization(authContext, Permissions.FINANCE_READ);
+    return this.service.getGoalProgress(authContext, args.id);
+  }
+
+  _handleCofrinhoDeposit(args, authContext) {
+    requireAuthorization(authContext, Permissions.GOALS_WRITE);
+    return this.service.movePiggyBankFunds(authContext, { goalId: args.goal_id, otherAccountId: args.source_account_id, amount: Math.round(args.amount * 100), date: args.date, direction: 'deposit', description: args.description });
+  }
+
+  _handleCofrinhoWithdraw(args, authContext) {
+    requireAuthorization(authContext, Permissions.GOALS_WRITE);
+    return this.service.movePiggyBankFunds(authContext, { goalId: args.goal_id, otherAccountId: args.destination_account_id, amount: Math.round(args.amount * 100), date: args.date, direction: 'withdraw', description: args.description });
   }
 
   // =========================================================================

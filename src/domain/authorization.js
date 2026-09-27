@@ -36,6 +36,7 @@ export const Permissions = Object.freeze({
   CARDS_WRITE: 'cards:write',
   CATEGORIES_WRITE: 'categories:write',
   BUDGETS_WRITE: 'budgets:write',
+  GOALS_WRITE: 'goals:write',
 
   // Extensão Fase 1: Compras, Itens, Locais e Histórico
   PURCHASES_WRITE: 'purchases:write',
@@ -69,6 +70,7 @@ const ROLE_PERMISSIONS = {
     Permissions.CARDS_WRITE,
     Permissions.CATEGORIES_WRITE,
     Permissions.BUDGETS_WRITE,
+    Permissions.GOALS_WRITE,
     Permissions.PURCHASES_WRITE,
     Permissions.PURCHASES_READ,
     Permissions.LOCATIONS_WRITE,
@@ -93,6 +95,7 @@ const ROLE_PERMISSIONS = {
     Permissions.CARDS_WRITE,
     Permissions.CATEGORIES_WRITE,
     Permissions.BUDGETS_WRITE,
+    Permissions.GOALS_WRITE,
     Permissions.PURCHASES_WRITE,
     Permissions.PURCHASES_READ,
     Permissions.LOCATIONS_WRITE,
@@ -114,6 +117,7 @@ const ROLE_PERMISSIONS = {
     Permissions.CARDS_WRITE,
     Permissions.CATEGORIES_WRITE,
     Permissions.BUDGETS_WRITE,
+    Permissions.GOALS_WRITE,
     Permissions.PURCHASES_WRITE,
     Permissions.PURCHASES_READ,
     Permissions.LOCATIONS_WRITE,

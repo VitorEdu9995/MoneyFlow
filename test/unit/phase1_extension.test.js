@@ -241,8 +241,8 @@ test('Extensão 6: Validação e Coexistência de Registries (62 Congelados + 15
   // 62 continuam estritamente intactos
   assert.equal(frozen.getToolNames().length, 62);
 
-  // Extensões adicionam 15 ferramentas (incluindo upload/download privado de anexos)
-  assert.equal(extension.getToolNames().length, 15);
+  // Extensões adicionam 22 ferramentas (incluindo metas/cofrinhos e anexos privados)
+  assert.equal(extension.getToolNames().length, 22);
   assert.equal(extension.getToolNames().includes('create_purchase_with_items'), true);
   assert.equal(extension.getToolNames().includes('create_attribute_definition'), true);
   assert.equal(extension.getToolNames().includes('get_price_history'), true);

@@ -1,5 +1,5 @@
 import { Outlet, Link, useLocation } from 'react-router-dom';
-import { Home, CreditCard, List, Tags, PieChart, BarChart2, Briefcase } from 'lucide-react';
+import { Home, CreditCard, List, Tags, PieChart, BarChart2, Briefcase, Target } from 'lucide-react';
 import logo from '../assets/logo.png';
 
 export default function Layout() {
@@ -11,6 +11,7 @@ export default function Layout() {
     { name: 'Transações', path: '/transactions', icon: List },
     { name: 'Categorias', path: '/categories', icon: Tags },
     { name: 'Orçamentos', path: '/budgets', icon: PieChart },
+    { name: 'Metas', path: '/goals', icon: Target },
     { name: 'Relatórios', path: '/reports', icon: BarChart2 },
   ];
 

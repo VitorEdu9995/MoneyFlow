@@ -15,6 +15,10 @@ import { AppError, ErrorCodes } from '../domain/envelope.js';
 import { Roles, requireAuthorization, Permissions } from '../domain/authorization.js';
 import { logger } from '../utils/logger.js';
 
+// Token não serializável: somente este módulo pode marcar uma transferência
+// como interna de cofrinho; argumentos recebidos pelo MCP nunca o produzem.
+const PIGGY_BANK_INTERNAL_TRANSFER = Symbol('piggy-bank-internal-transfer');
+
 // =========================================================================
 // UTILITÁRIOS DE DATA (FASE 2 - ECO-62)
 // Todas as datas trafegam como string 'YYYY-MM-DD'. Meses são sempre
@@ -628,17 +632,30 @@ export class SpaceIsolationService {
       transactionDate,
       observation = null,
       tags = [],
+      _allowPiggy = false,
+      internalTransferToken = null,
     },
   ) {
     requireAuthorization(authContext, Permissions.TRANSACTIONS_WRITE);
+    const isPiggyBankInternal = internalTransferToken === PIGGY_BANK_INTERNAL_TRANSFER;
+    if (_allowPiggy !== isPiggyBankInternal) {
+      throw new AppError(ErrorCodes.FORBIDDEN, 'Movimentação interna de cofrinho inválida.', 403);
+    }
 
     // Validação de Cross-Space em todas as FKs
     if (accountId) {
-      const acc = this.db.prepare('SELECT space_id FROM accounts WHERE id = ?').get(accountId);
+      const acc = this.db.prepare('SELECT space_id, is_piggy_bank FROM accounts WHERE id = ?').get(accountId);
       if (!acc || acc.space_id !== authContext.spaceId) {
         throw new AppError(
           ErrorCodes.CROSS_SPACE_REFERENCE_DENIED,
           'Conta pertence a outro espaço ou não existe.',
+          403,
+        );
+      }
+      if (acc.is_piggy_bank && !_allowPiggy) {
+        throw new AppError(
+          ErrorCodes.CROSS_SPACE_REFERENCE_DENIED,
+          'Conta-cofrinho só pode ser movimentada pelas operações de aporte e saque.',
           403,
         );
       }
@@ -682,8 +699,8 @@ export class SpaceIsolationService {
         .prepare(
           `INSERT INTO transactions (
             id, space_id, type, description, amount, account_id, credit_card_id,
-            category_id, destination_account_id, transaction_date, observation, tags
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            category_id, destination_account_id, transaction_date, observation, tags, is_piggy_bank_internal
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           id,
@@ -698,6 +715,7 @@ export class SpaceIsolationService {
           transactionDate,
           observation,
           JSON.stringify(tags),
+          isPiggyBankInternal ? 1 : 0,
         );
 
       // Recálculo atômico de saldo: mesma unidade de trabalho do INSERT (via
@@ -710,7 +728,7 @@ export class SpaceIsolationService {
         action: 'transaction.create',
         entityType: 'transactions',
         entityId: id,
-        newData: { id, type, description, amount, transactionDate },
+        newData: { id, type, description, amount, transactionDate, isPiggyBankInternal },
       });
 
       return this.getTransaction(authContext, id);
@@ -729,12 +747,35 @@ export class SpaceIsolationService {
   }
 
   /**
+   * Impede alterações parciais de transferências que movimentam um cofrinho.
+   * A consulta de legado mantém protegidos registros criados antes do marcador.
+   */
+  _assertTransactionCanBeMutated(transaction) {
+    const isLegacyPiggyBankInternal = this.db
+      .prepare(
+        `SELECT 1
+         FROM transfers transfer
+         JOIN accounts source_account ON source_account.id = transfer.source_account_id
+         JOIN accounts destination_account ON destination_account.id = transfer.destination_account_id
+         WHERE transfer.space_id = ?
+           AND (transfer.source_transaction_id = ? OR transfer.destination_transaction_id = ?)
+           AND (source_account.is_piggy_bank = 1 OR destination_account.is_piggy_bank = 1)`,
+      )
+      .get(transaction.space_id, transaction.id, transaction.id);
+
+    if (transaction.is_piggy_bank_internal || isLegacyPiggyBankInternal) {
+      throw new AppError(ErrorCodes.FORBIDDEN, 'Transações internas de cofrinho só podem ser movimentadas por aporte ou saque.', 403);
+    }
+  }
+
+  /**
    * Atualiza campos permitidos de uma transação existente, revalidando
    * qualquer nova referência entre espaços (ex: trocar categoria).
    */
   updateTransaction(authContext, transactionId, updates = {}) {
     requireAuthorization(authContext, Permissions.TRANSACTIONS_WRITE);
     const existing = this.getTransaction(authContext, transactionId);
+    this._assertTransactionCanBeMutated(existing);
 
     if (updates.categoryId) {
       const cat = this.db.prepare('SELECT space_id FROM categories WHERE id = ?').get(updates.categoryId);
@@ -797,6 +838,7 @@ export class SpaceIsolationService {
   deleteTransaction(authContext, transactionId) {
     requireAuthorization(authContext, Permissions.TRANSACTIONS_WRITE);
     const existing = this.getTransaction(authContext, transactionId);
+    this._assertTransactionCanBeMutated(existing);
 
     return this._runAtomic(() => {
       this.db
@@ -826,6 +868,7 @@ export class SpaceIsolationService {
   setTransactionPaid(authContext, { transactionId, paid = true, effectiveDate = null }) {
     requireAuthorization(authContext, Permissions.TRANSACTIONS_WRITE);
     const existing = this.getTransaction(authContext, transactionId);
+    this._assertTransactionCanBeMutated(existing);
 
     const paidStatus = paid ? 'paid' : 'unpaid';
     const effective = paid ? effectiveDate || existing.transaction_date : null;
@@ -923,11 +966,12 @@ export class SpaceIsolationService {
 
       for (const transactionId of transactionIds) {
         const tx = this.db
-          .prepare('SELECT id FROM transactions WHERE id = ? AND space_id = ? AND deleted_at IS NULL')
+          .prepare('SELECT * FROM transactions WHERE id = ? AND space_id = ? AND deleted_at IS NULL')
           .get(transactionId, authContext.spaceId);
         if (!tx) {
           throw new AppError(ErrorCodes.NOT_FOUND, `Transação '${transactionId}' não encontrada.`, 404);
         }
+        this._assertTransactionCanBeMutated(tx);
         for (const tagId of tagIds) {
           insertLink.run(authContext.spaceId, transactionId, tagId);
         }
@@ -959,9 +1003,16 @@ export class SpaceIsolationService {
 
   createTransfer(
     authContext,
-    { id = randomUUID(), sourceAccountId, destinationAccountId, amount, transferDate, description = 'Transferência entre contas' },
+    {
+      id = randomUUID(), sourceAccountId, destinationAccountId, amount, transferDate,
+      description = 'Transferência entre contas', _allowPiggy = false, internalTransferToken = null,
+    },
   ) {
     requireAuthorization(authContext, Permissions.TRANSACTIONS_WRITE);
+    const isPiggyBankInternal = internalTransferToken === PIGGY_BANK_INTERNAL_TRANSFER;
+    if (_allowPiggy !== isPiggyBankInternal) {
+      throw new AppError(ErrorCodes.FORBIDDEN, 'Movimentação interna de cofrinho inválida.', 403);
+    }
 
     if (!sourceAccountId || !destinationAccountId) {
       throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Conta de origem e de destino são obrigatórias.', 400);
@@ -979,12 +1030,31 @@ export class SpaceIsolationService {
     if (!source) {
       throw new AppError(ErrorCodes.CROSS_SPACE_REFERENCE_DENIED, 'Conta de origem pertence a outro espaço ou não existe.', 403);
     }
+    if (!_allowPiggy && source.is_piggy_bank) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Use cofrinho_withdraw para sacar de uma conta-cofrinho.', 400);
+    }
 
     const destination = this.db
       .prepare('SELECT * FROM accounts WHERE id = ? AND space_id = ?')
       .get(destinationAccountId, authContext.spaceId);
     if (!destination) {
       throw new AppError(ErrorCodes.CROSS_SPACE_REFERENCE_DENIED, 'Conta de destino pertence a outro espaço ou não existe.', 403);
+    }
+    if (!_allowPiggy && destination.is_piggy_bank) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Use cofrinho_deposit para depositar em uma conta-cofrinho.', 400);
+    }
+
+    if (isPiggyBankInternal) {
+      if (Boolean(source.is_piggy_bank) === Boolean(destination.is_piggy_bank)) {
+        throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Transferência interna deve envolver exatamente uma conta-cofrinho.', 400);
+      }
+      const piggyBankAccountId = source.is_piggy_bank ? source.id : destination.id;
+      const piggyBank = this.db
+        .prepare('SELECT id FROM piggy_banks WHERE account_id = ? AND space_id = ?')
+        .get(piggyBankAccountId, authContext.spaceId);
+      if (!piggyBank) {
+        throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Conta-cofrinho interna inválida.', 400);
+      }
     }
 
     if (source.currency !== destination.currency) {
@@ -1007,6 +1077,8 @@ export class SpaceIsolationService {
         accountId: sourceAccountId,
         destinationAccountId,
         transactionDate: transferDate,
+        _allowPiggy,
+        internalTransferToken,
       });
 
       this.createTransaction(authContext, {
@@ -1016,6 +1088,8 @@ export class SpaceIsolationService {
         amount,
         accountId: destinationAccountId,
         transactionDate: transferDate,
+        _allowPiggy,
+        internalTransferToken,
       });
 
       this.db
@@ -2874,6 +2948,137 @@ export class SpaceIsolationService {
   }
 
   // =========================================================================
+  // METAS FINANCEIRAS E COFRINHOS (ECO-66 S4.1)
+  // =========================================================================
+
+  _getGoal(authContext, goalId) {
+    const goal = this.db.prepare('SELECT * FROM goals WHERE id = ? AND space_id = ? AND deleted_at IS NULL').get(goalId, authContext.spaceId);
+    if (!goal) throw new AppError(ErrorCodes.NOT_FOUND, 'Meta não encontrada.', 404);
+    return goal;
+  }
+
+  _assertGoalCategory(spaceId, categoryId) {
+    const category = this.db.prepare("SELECT id FROM categories WHERE id = ? AND space_id = ? AND kind = 'expense' AND archived_at IS NULL").get(categoryId, spaceId);
+    if (!category) throw new AppError(ErrorCodes.CROSS_SPACE_REFERENCE_DENIED, 'Categoria de despesa não encontrada no espaço.', 403);
+  }
+
+  createGoal(authContext, { name, goalType, targetAmount, categoryId = null, startDate, deadline, recurrenceRule = null }) {
+    requireAuthorization(authContext, Permissions.GOALS_WRITE);
+    if (!name || !['savings', 'spending'].includes(goalType) || !(targetAmount > 0) || !startDate || !deadline || deadline < startDate) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Dados da meta inválidos.', 400);
+    }
+    if (goalType === 'spending' && !categoryId) throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Meta de gasto exige category_id.', 400);
+    if (categoryId) this._assertGoalCategory(authContext.spaceId, categoryId);
+
+    return this._runAtomic(() => {
+      const id = randomUUID();
+      this.db.prepare(`INSERT INTO goals (id, space_id, name, goal_type, target_amount, category_id, start_date, deadline, recurrence_rule) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(id, authContext.spaceId, name, goalType, targetAmount, categoryId, startDate, deadline, recurrenceRule);
+      let piggyBank = null;
+      if (goalType === 'savings') {
+        const accountId = randomUUID();
+        this.db.prepare(`INSERT INTO accounts (id, space_id, name, account_type, opening_balance, current_balance, is_piggy_bank) VALUES (?, ?, ?, 'savings', 0, 0, 1)`)
+          .run(accountId, authContext.spaceId, `Cofrinho: ${name}`);
+        const piggyId = randomUUID();
+        this.db.prepare('INSERT INTO piggy_banks (id, space_id, goal_id, account_id) VALUES (?, ?, ?, ?)').run(piggyId, authContext.spaceId, id, accountId);
+        piggyBank = { id: piggyId, accountId };
+      }
+      this.logAudit({ spaceId: authContext.spaceId, actorUserId: authContext.userId, action: 'goal.create', entityType: 'goals', entityId: id, newData: { name, goalType, targetAmount, categoryId, piggyBank } });
+      return this.getGoalProgress(authContext, id);
+    });
+  }
+
+  updateGoal(authContext, goalId, updates = {}) {
+    requireAuthorization(authContext, Permissions.GOALS_WRITE);
+    const existing = this._getGoal(authContext, goalId);
+    const targetAmount = updates.targetAmount ?? existing.target_amount;
+    const startDate = updates.startDate ?? existing.start_date;
+    const deadline = updates.deadline ?? existing.deadline;
+    const categoryId = updates.categoryId ?? existing.category_id;
+    if (!(targetAmount > 0) || deadline < startDate || (existing.goal_type === 'spending' && !categoryId)) throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Atualização de meta inválida.', 400);
+    if (categoryId) this._assertGoalCategory(authContext.spaceId, categoryId);
+    const fields = { name: updates.name ?? existing.name, target_amount: targetAmount, category_id: categoryId, start_date: startDate, deadline, recurrence_rule: updates.recurrenceRule ?? existing.recurrence_rule };
+    this._runAtomic(() => {
+      this.db.prepare("UPDATE goals SET name = ?, target_amount = ?, category_id = ?, start_date = ?, deadline = ?, recurrence_rule = ?, updated_at = datetime('now') WHERE id = ? AND space_id = ?")
+        .run(fields.name, fields.target_amount, fields.category_id, fields.start_date, fields.deadline, fields.recurrence_rule, goalId, authContext.spaceId);
+      this.logAudit({ spaceId: authContext.spaceId, actorUserId: authContext.userId, action: 'goal.update', entityType: 'goals', entityId: goalId, oldData: existing, newData: fields });
+    });
+    return this.getGoalProgress(authContext, goalId);
+  }
+
+  deleteGoal(authContext, goalId) {
+    requireAuthorization(authContext, Permissions.GOALS_WRITE);
+    const existing = this._getGoal(authContext, goalId);
+    this._runAtomic(() => {
+      if (existing.goal_type === 'savings') {
+        const piggyBank = this.db
+          .prepare(
+            `SELECT a.current_balance
+             FROM piggy_banks pb
+             JOIN accounts a ON a.id = pb.account_id
+             WHERE pb.goal_id = ? AND pb.space_id = ?`,
+          )
+          .get(goalId, authContext.spaceId);
+
+        if (!piggyBank || Number(piggyBank.current_balance) !== 0) {
+          throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Não é possível excluir um cofrinho com saldo. Faça um saque até o saldo ficar zerado.', 400);
+        }
+      }
+
+      this.db.prepare("UPDATE goals SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND space_id = ?").run(goalId, authContext.spaceId);
+      this.logAudit({ spaceId: authContext.spaceId, actorUserId: authContext.userId, action: 'goal.delete', entityType: 'goals', entityId: goalId, oldData: existing });
+    });
+    return { deleted: true, id: goalId };
+  }
+
+  getGoalProgress(authContext, goalId) {
+    requireAuthorization(authContext, Permissions.FINANCE_READ);
+    const goal = this._getGoal(authContext, goalId);
+    let currentAmount = 0;
+    let piggyBank = null;
+    if (goal.goal_type === 'savings') {
+      piggyBank = this.db.prepare(`SELECT pb.id, pb.account_id, a.current_balance FROM piggy_banks pb JOIN accounts a ON a.id = pb.account_id WHERE pb.goal_id = ? AND pb.space_id = ?`).get(goal.id, authContext.spaceId);
+      currentAmount = piggyBank?.current_balance ?? 0;
+    } else {
+      currentAmount = this.db.prepare(`SELECT COALESCE(SUM(amount), 0) AS total FROM transactions WHERE space_id = ? AND category_id = ? AND type IN ('expense', 'card_purchase') AND deleted_at IS NULL AND transaction_date >= ? AND transaction_date <= ?`).get(authContext.spaceId, goal.category_id, goal.start_date, goal.deadline).total;
+    }
+    return { ...goal, current_amount: currentAmount, progress_percent: Math.min(100, Math.round((currentAmount / goal.target_amount) * 10000) / 100), piggy_bank: piggyBank ? { id: piggyBank.id, account_id: piggyBank.account_id, balance: piggyBank.current_balance } : null };
+  }
+
+  listGoals(authContext, { limit = 50, offset = 0 } = {}) {
+    requireAuthorization(authContext, Permissions.FINANCE_READ);
+    const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 100);
+    const safeOffset = Math.max(Number(offset) || 0, 0);
+    const ids = this.db.prepare('SELECT id FROM goals WHERE space_id = ? AND deleted_at IS NULL ORDER BY deadline ASC, created_at DESC LIMIT ? OFFSET ?').all(authContext.spaceId, safeLimit, safeOffset);
+    return ids.map(({ id }) => this.getGoalProgress(authContext, id));
+  }
+
+  movePiggyBankFunds(authContext, { goalId, otherAccountId, amount, date, direction, description }) {
+    requireAuthorization(authContext, Permissions.GOALS_WRITE);
+    if (!(amount > 0)) throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Valor do cofrinho deve ser positivo.', 400);
+    const goal = this._getGoal(authContext, goalId);
+    if (goal.goal_type !== 'savings') throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Apenas metas de poupança possuem cofrinho.', 400);
+    const bank = this.db.prepare('SELECT pb.id, pb.account_id, a.current_balance FROM piggy_banks pb JOIN accounts a ON a.id = pb.account_id WHERE pb.goal_id = ? AND pb.space_id = ?').get(goalId, authContext.spaceId);
+    const other = this.db.prepare('SELECT id, is_piggy_bank, current_balance FROM accounts WHERE id = ? AND space_id = ? AND archived_at IS NULL').get(otherAccountId, authContext.spaceId);
+    if (!other || other.is_piggy_bank) throw new AppError(ErrorCodes.CROSS_SPACE_REFERENCE_DENIED, 'Conta de origem ou destino inválida.', 403);
+    if (direction === 'withdraw' && bank.current_balance < amount) throw new AppError(ErrorCodes.INSUFFICIENT_FUNDS, 'Saldo insuficiente no cofrinho.', 409);
+    if (direction === 'deposit' && other.current_balance < amount) throw new AppError(ErrorCodes.INSUFFICIENT_FUNDS, 'Saldo insuficiente na conta de origem.', 409);
+    const sourceAccountId = direction === 'deposit' ? other.id : bank.account_id;
+    const destinationAccountId = direction === 'deposit' ? bank.account_id : other.id;
+    const transfer = this.createTransfer(authContext, {
+      sourceAccountId,
+      destinationAccountId,
+      amount,
+      transferDate: date,
+      description: description || (direction === 'deposit' ? `Aporte em ${goal.name}` : `Saque de ${goal.name}`),
+      _allowPiggy: true,
+      internalTransferToken: PIGGY_BANK_INTERNAL_TRANSFER,
+    });
+    this.logAudit({ spaceId: authContext.spaceId, actorUserId: authContext.userId, action: `piggy_bank.${direction}`, entityType: 'piggy_banks', entityId: bank.id, newData: { goalId, amount, transferId: transfer.id } });
+    return { transfer, goal: this.getGoalProgress(authContext, goalId) };
+  }
+
+  // =========================================================================
   // CASHFLOW SANKEY DINÂMICO (ECO-64)
   //
   // Gera nodes e links para visualização Sankey do fluxo de caixa de um período.
@@ -2940,11 +3145,13 @@ export class SpaceIsolationService {
                 c.kind as category_kind,
                 ${dateField} as ref_date
          FROM transactions t
+         LEFT JOIN accounts a ON a.id = t.account_id
          LEFT JOIN categories c ON c.id = t.category_id
          WHERE t.space_id = ?
            AND t.deleted_at IS NULL
            AND ${dateField} >= ? AND ${dateField} <= ?
            AND t.type NOT IN ('transfer')
+           AND COALESCE(a.is_piggy_bank, 0) = 0
            ${paidFilter}
            ${extraFilter}
          ORDER BY t.type, category_name`,
