@@ -202,4 +202,3 @@ test('endpoint operacional isola métricas de armazenamento por espaço entre te
   assert.equal(statusB.body.data.metrics.storage.attachments, 2);
   assert.equal(statusB.body.data.metrics.storage.bytes, resultB1.data.fileSize + resultB2.data.fileSize);
 });
-
