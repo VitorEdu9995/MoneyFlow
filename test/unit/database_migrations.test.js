@@ -17,6 +17,7 @@ test('Migrations estruturais sobem em banco vazio com integridade e sem dados au
     '007_financial_goals',
     '008_protect_piggy_bank_internal_transactions',
     '009_attachment_lifecycle',
+    '010_institution_logo_catalog',
   ]);
 
   // Nenhuma tabela possui dados inseridos automaticamente
@@ -31,6 +32,8 @@ test('Migrations estruturais sobem em banco vazio com integridade e sem dados au
   const attachments = db.prepare('SELECT COUNT(*) as count FROM attachments').get().count;
   const goals = db.prepare('SELECT COUNT(*) as count FROM goals').get().count;
   const piggyBanks = db.prepare('SELECT COUNT(*) as count FROM piggy_banks').get().count;
+  const institutions = db.prepare('SELECT COUNT(*) as count FROM institutions').get().count;
+  const cardBrands = db.prepare('SELECT COUNT(*) as count FROM card_brands').get().count;
 
   assert.equal(users, 0);
   assert.equal(spaces, 0);
@@ -43,6 +46,8 @@ test('Migrations estruturais sobem em banco vazio com integridade e sem dados au
   assert.equal(attachments, 0);
   assert.equal(goals, 0);
   assert.equal(piggyBanks, 0);
+  assert.equal(institutions, 0);
+  assert.equal(cardBrands, 0);
 
   // Executar novamente não reaplica (idempotente)
   const reapplied = runMigrations(db);
@@ -53,7 +58,8 @@ test('Migrations são reversíveis via rollback explícito', () => {
   const db = createDatabase(':memory:');
   runMigrations(db);
 
-  // Reversão explícita na ordem de dependência (008 a 001).
+  // Reversão explícita na ordem de dependência (010 a 001).
+  rollbackMigration(db, '010_institution_logo_catalog');
   rollbackMigration(db, '009_attachment_lifecycle');
   rollbackMigration(db, '008_protect_piggy_bank_internal_transactions');
   rollbackMigration(db, '007_financial_goals');
@@ -80,6 +86,9 @@ test('Migrations são reversíveis via rollback explícito', () => {
   assert.equal(tables.includes('attachments'), false);
   assert.equal(tables.includes('goals'), false);
   assert.equal(tables.includes('piggy_banks'), false);
+  assert.equal(tables.includes('institutions'), false);
+  assert.equal(tables.includes('card_brands'), false);
+  assert.equal(tables.includes('logo_assets'), false);
 });
 
 test('Migration 004 amplia import_batches (imported_cards/imported_payments) e import_entities (entity_type credit_cards)', () => {

@@ -17,6 +17,7 @@ import * as attachments from './migrations/006_attachments.js';
 import * as financialGoals from './migrations/007_financial_goals.js';
 import * as protectPiggyBankInternalTransactions from './migrations/008_protect_piggy_bank_internal_transactions.js';
 import * as attachmentLifecycle from './migrations/009_attachment_lifecycle.js';
+import * as institutionLogoCatalog from './migrations/010_institution_logo_catalog.js';
 
 export const MIGRATIONS = [
   { id: '001_initial_schema', module: initialSchema },
@@ -28,6 +29,7 @@ export const MIGRATIONS = [
   { id: '007_financial_goals', module: financialGoals },
   { id: '008_protect_piggy_bank_internal_transactions', module: protectPiggyBankInternalTransactions },
   { id: '009_attachment_lifecycle', module: attachmentLifecycle },
+  { id: '010_institution_logo_catalog', module: institutionLogoCatalog },
 ];
 
 /**
