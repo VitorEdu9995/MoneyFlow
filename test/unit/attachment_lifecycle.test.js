@@ -27,7 +27,9 @@ function setup() {
   const attachmentService = new AttachmentService(db, service);
   return {
     db,
+    service,
     attachmentService,
+    space,
     ownerContext,
     editorContext: service.resolveAuthContext({ userId: editor.id, spaceId: space.id }),
     viewerContext: service.resolveAuthContext({ userId: viewer.id, spaceId: space.id }),
@@ -59,12 +61,12 @@ test('anexos: URL temporária usa token de uso único, expira e mantém token fo
 
   const token = new URL(`https://moneyflow.test${issued.downloadUrl}`).searchParams.get('token');
   const first = await executeMcpHttpRequest(new McpGateway({ attachmentService }), {
-    method: 'GET', path: issued.downloadUrl, body: null, authContext: null,
+    method: 'GET', path: issued.downloadUrl, body: null, authContext: ownerContext,
   });
   assert.equal(first.status, 200);
   assert.equal(first.body.data.content_base64, pdf.toString('base64'));
   await assert.rejects(
-    () => attachmentService.downloadAttachmentByToken(attachment.id, token),
+    () => attachmentService.downloadAttachmentByToken(ownerContext, attachment.id, token),
     (error) => error.code === ErrorCodes.NOT_FOUND,
   );
 
@@ -73,9 +75,49 @@ test('anexos: URL temporária usa token de uso único, expira e mantém token fo
   db.prepare('UPDATE attachment_download_tokens SET expires_at = ? WHERE token_hash = ?')
     .run(new Date(Date.now() - 1_000).toISOString(), attachmentService.hashDownloadToken(expiredToken));
   await assert.rejects(
-    () => attachmentService.downloadAttachmentByToken(attachment.id, expiredToken),
+    () => attachmentService.downloadAttachmentByToken(ownerContext, attachment.id, expiredToken),
     (error) => error.code === ErrorCodes.NOT_FOUND,
   );
+});
+
+test('anexos: download temporário exige contexto autenticado atual, permissão e espaço do token antes de consumi-lo', async (t) => {
+  const { db, service, attachmentService, ownerContext, space } = setup();
+  const attachment = await upload(attachmentService, ownerContext);
+  t.after(() => cleanup(attachment.id));
+  const gateway = new McpGateway({ attachmentService });
+
+  const tokenFor = async () => {
+    const issued = await attachmentService.createDownloadUrl(ownerContext, attachment.id, { expiresInSeconds: 60 });
+    return new URL(`https://moneyflow.test${issued.downloadUrl}`).searchParams.get('token');
+  };
+  const request = (token, authContext) => executeMcpHttpRequest(gateway, {
+    method: 'GET', path: `/api/v1/attachments/${attachment.id}/download?token=${token}`, body: null, authContext,
+  });
+  const isUnused = (token) => db.prepare('SELECT used_at FROM attachment_download_tokens WHERE token_hash = ?')
+    .get(attachmentService.hashDownloadToken(token)).used_at === null;
+
+  const anonymousToken = await tokenFor();
+  assert.equal((await request(anonymousToken, null)).status, 401);
+  assert.equal(isUnused(anonymousToken), true);
+
+  const otherOwner = service.createUser({ name: 'Outro owner', email: `other-${crypto.randomUUID()}@test.dev` });
+  const otherSpace = service.createSpace({ name: 'Outro espaço', ownerUserId: otherOwner.id });
+  const otherContext = service.resolveAuthContext({ userId: otherOwner.id, spaceId: otherSpace.id });
+  const crossSpaceToken = await tokenFor();
+  assert.equal((await request(crossSpaceToken, otherContext)).status, 404);
+  assert.equal(isUnused(crossSpaceToken), true);
+
+  const viewer = service.createUser({ name: 'Viewer revogado', email: `revoked-${crypto.randomUUID()}@test.dev` });
+  service.addMember(ownerContext, { targetUserId: viewer.id, role: Roles.VIEWER });
+  const staleViewerContext = service.resolveAuthContext({ userId: viewer.id, spaceId: space.id });
+  service.removeMember(ownerContext, { targetUserId: viewer.id });
+  const revokedToken = await tokenFor();
+  assert.equal((await request(revokedToken, staleViewerContext)).status, 403);
+  assert.equal(isUnused(revokedToken), true);
+
+  const validToken = await tokenFor();
+  assert.equal((await request(validToken, ownerContext)).status, 200);
+  assert.equal(isUnused(validToken), false);
 });
 
 test('anexos: exclusão lógica bloqueia download, invalida URLs e é auditada; purge remove arquivo expirado', async (t) => {
@@ -87,7 +129,7 @@ test('anexos: exclusão lógica bloqueia download, invalida URLs e é auditada; 
 
   await attachmentService.deleteAttachment(editorContext, attachment.id);
   await assert.rejects(() => attachmentService.downloadAttachment(editorContext, attachment.id), /not found/i);
-  await assert.rejects(() => attachmentService.downloadAttachmentByToken(attachment.id, token), /not found/i);
+  await assert.rejects(() => attachmentService.downloadAttachmentByToken(editorContext, attachment.id, token), /not found/i);
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM audit_logs WHERE action = 'attachment.delete'").get().count, 1);
 
   await attachmentService.setRetentionPolicy(ownerContext, { retentionDays: 1 });
@@ -100,6 +142,20 @@ test('anexos: exclusão lógica bloqueia download, invalida URLs e é auditada; 
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM attachments WHERE id = ?').get(retained.id).count, 0);
   await assert.rejects(() => fs.access(path.join(process.cwd(), '.data', 'attachments', `${retained.id}.pdf`)));
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM audit_logs WHERE action = 'attachment.expire'").get().count, 1);
+});
+
+test('anexos: purge remove também o arquivo de anexo apagado logicamente ao fim da retenção', async (t) => {
+  const { db, attachmentService, ownerContext } = setup();
+  const attachment = await upload(attachmentService, ownerContext);
+  t.after(() => cleanup(attachment.id));
+  const attachmentPath = path.join(process.cwd(), '.data', 'attachments', `${attachment.id}.pdf`);
+
+  await attachmentService.deleteAttachment(ownerContext, attachment.id);
+  db.prepare('UPDATE attachments SET expires_at = ? WHERE id = ?').run(new Date(Date.now() - 1_000).toISOString(), attachment.id);
+
+  assert.deepEqual(await attachmentService.purgeExpiredAttachments(ownerContext), { purged: 1 });
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM attachments WHERE id = ?').get(attachment.id).count, 0);
+  await assert.rejects(() => fs.access(attachmentPath));
 });
 
 test('anexos: isolamento por espaço, limites de papel e ferramentas MCP novas', async (t) => {

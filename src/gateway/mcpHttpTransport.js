@@ -11,6 +11,7 @@ export async function executeMcpHttpRequest(gateway, { method, path, body, authC
         throw new AppError(ErrorCodes.NOT_FOUND, 'Attachment not found.', 404);
       }
       const attachment = await gateway.attachmentService.downloadAttachmentByToken(
+        authContext,
         decodeURIComponent(temporaryDownload[1]),
         token,
       );

@@ -242,7 +242,13 @@ export class AttachmentService {
     };
   }
 
-  async downloadAttachmentByToken(attachmentId, token) {
+  async downloadAttachmentByToken(authContext, attachmentId, token) {
+    const currentAuthContext = this.spaceIsolationService.resolveAuthContext({
+      userId: authContext?.userId,
+      spaceId: authContext?.spaceId,
+      requestId: authContext?.requestId,
+    });
+    requireAuthorization(currentAuthContext, Permissions.ATTACHMENTS_READ);
     if (typeof attachmentId !== 'string' || typeof token !== 'string' || token.length < 32) {
       throw new AppError(ErrorCodes.NOT_FOUND, 'Attachment not found.', 404);
     }
@@ -251,24 +257,24 @@ export class AttachmentService {
     const consumed = this.db.prepare(
       `UPDATE attachment_download_tokens SET used_at = ?
        WHERE token_hash = ? AND attachment_id = ? AND used_at IS NULL AND expires_at > ?
-         AND EXISTS (SELECT 1 FROM attachments WHERE id = ? AND deleted_at IS NULL AND (expires_at IS NULL OR expires_at > ?))`,
-    ).run(now, tokenHash, attachmentId, now, attachmentId, now);
+         AND space_id = ?
+         AND EXISTS (SELECT 1 FROM attachments WHERE id = ? AND space_id = ? AND deleted_at IS NULL AND (expires_at IS NULL OR expires_at > ?))`,
+    ).run(now, tokenHash, attachmentId, now, currentAuthContext.spaceId, attachmentId, currentAuthContext.spaceId, now);
     if (consumed.changes !== 1) {
       throw new AppError(ErrorCodes.NOT_FOUND, 'Attachment not found.', 404);
     }
-    const tokenRecord = this.db.prepare('SELECT space_id, created_by FROM attachment_download_tokens WHERE token_hash = ?').get(tokenHash);
-    const attachment = this._activeAttachment(attachmentId, tokenRecord.space_id);
+    const attachment = this._activeAttachment(attachmentId, currentAuthContext.spaceId);
     if (!attachment) {
       throw new AppError(ErrorCodes.NOT_FOUND, 'Attachment not found.', 404);
     }
     try {
       const buffer = await fs.readFile(attachment.storage_path);
-      if (!this._activeAttachment(attachmentId, tokenRecord.space_id)) {
+      if (!this._activeAttachment(attachmentId, currentAuthContext.spaceId)) {
         throw new AppError(ErrorCodes.NOT_FOUND, 'Attachment not found.', 404);
       }
       this.spaceIsolationService.logAudit({
         spaceId: attachment.space_id,
-        actorUserId: tokenRecord.created_by,
+        actorUserId: currentAuthContext.userId,
         action: 'attachment.download',
         entityType: 'attachments',
         entityId: attachment.id,
@@ -307,7 +313,7 @@ export class AttachmentService {
     requireAuthorization(authContext, Permissions.SPACE_UPDATE);
     const now = this._now();
     const expired = this.db.prepare(
-      'SELECT * FROM attachments WHERE space_id = ? AND deleted_at IS NULL AND expires_at IS NOT NULL AND expires_at <= ?',
+      'SELECT * FROM attachments WHERE space_id = ? AND expires_at IS NOT NULL AND expires_at <= ?',
     ).all(authContext.spaceId, now);
     for (const attachment of expired) {
       this.db.prepare('UPDATE attachments SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL').run(now, attachment.id);

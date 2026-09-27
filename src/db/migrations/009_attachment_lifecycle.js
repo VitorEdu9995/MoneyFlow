@@ -1,6 +1,12 @@
 export const up = `
   ALTER TABLE attachments ADD COLUMN expires_at TEXT;
 
+  -- Anexos existentes entram na mesma política padrão de 30 dias usada pelo
+  -- serviço; o formato ISO preserva comparações lexicográficas no SQLite.
+  UPDATE attachments
+  SET expires_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+30 days')
+  WHERE expires_at IS NULL;
+
   CREATE TABLE IF NOT EXISTS attachment_retention_policies (
     space_id TEXT PRIMARY KEY,
     retention_days INTEGER NOT NULL CHECK (retention_days BETWEEN 1 AND 3650),
