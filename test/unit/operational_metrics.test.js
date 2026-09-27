@@ -19,6 +19,14 @@ function createEnvironment({ metrics = new OperationalMetrics() } = {}) {
   const space = service.createSpace({ name: 'Metrics', ownerUserId: owner.id });
   const ownerContext = service.resolveAuthContext({ userId: owner.id, spaceId: space.id });
   service.addMember(ownerContext, { targetUserId: viewer.id, role: 'viewer' });
+  const account = service.createAccount(ownerContext, { name: 'Conta Principal' });
+  const tx = service.createTransaction(ownerContext, {
+    description: 'Transação Teste',
+    amount: 1000,
+    type: 'expense',
+    transactionDate: '2026-09-27',
+    accountId: account.id,
+  });
   const attachmentService = new AttachmentService(db, service, { metrics });
   const gateway = new McpGateway({ service, attachmentService, metrics });
   return {
@@ -28,6 +36,8 @@ function createEnvironment({ metrics = new OperationalMetrics() } = {}) {
     gateway,
     owner: ownerContext,
     viewer: service.resolveAuthContext({ userId: viewer.id, spaceId: space.id }),
+    account,
+    tx,
   };
 }
 
@@ -74,9 +84,9 @@ test('logs, rate limit e anexos alimentam métricas por injeção sem registrar 
   middleware(request, response, () => {});
   middleware(request, response, () => {});
 
-  const { gateway, owner } = createEnvironment({ metrics });
+  const { gateway, owner, tx } = createEnvironment({ metrics });
   const result = await gateway.executeTool('anexos_upload', {
-    entity_type: 'transaction', entity_id: 'tx-1', file_name: 'nota.pdf',
+    entity_type: 'transaction', entity_id: tx.id, file_name: 'nota.pdf',
     declared_mime_type: 'application/pdf', content_base64: Buffer.from('%PDF-1.7').toString('base64'),
   }, owner);
 
@@ -135,3 +145,61 @@ test('transporte HTTP classifica tentativa cross-space como alerta IDOR sem rete
   assert.deepEqual(snapshot.alerts.map(({ type }) => type), ['idor']);
   assert.doesNotMatch(JSON.stringify(snapshot), new RegExp(otherAccount.id));
 });
+
+test('endpoint operacional isola métricas de armazenamento por espaço entre tenants', async () => {
+  const metrics = new OperationalMetrics();
+  const { service, gateway, owner: ownerA, tx: txA } = createEnvironment({ metrics });
+
+  // Cria Tenant B com transação válida
+  const ownerBUser = service.createUser({ name: 'Owner B', email: 'owner-b@metrics.test' });
+  const spaceB = service.createSpace({ name: 'Space B', ownerUserId: ownerBUser.id });
+  const ownerB = service.resolveAuthContext({ userId: ownerBUser.id, spaceId: spaceB.id });
+  const accountB = service.createAccount(ownerB, { name: 'Conta B' });
+  const txB1 = service.createTransaction(ownerB, {
+    description: 'Transação B1',
+    amount: 1500,
+    type: 'expense',
+    transactionDate: '2026-09-27',
+    accountId: accountB.id,
+  });
+  const txB2 = service.createTransaction(ownerB, {
+    description: 'Transação B2',
+    amount: 2500,
+    type: 'expense',
+    transactionDate: '2026-09-27',
+    accountId: accountB.id,
+  });
+
+  // Tenant A faz upload de 1 anexo
+  const resultA = await gateway.executeTool('anexos_upload', {
+    entity_type: 'transaction', entity_id: txA.id, file_name: 'nota-a.pdf',
+    declared_mime_type: 'application/pdf', content_base64: Buffer.from('%PDF-1.7 space A').toString('base64'),
+  }, ownerA);
+
+  // Tenant B faz upload de 2 anexos
+  const resultB1 = await gateway.executeTool('anexos_upload', {
+    entity_type: 'transaction', entity_id: txB1.id, file_name: 'nota-b1.pdf',
+    declared_mime_type: 'application/pdf', content_base64: Buffer.from('%PDF-1.7 space B 1').toString('base64'),
+  }, ownerB);
+  const resultB2 = await gateway.executeTool('anexos_upload', {
+    entity_type: 'transaction', entity_id: txB2.id, file_name: 'nota-b2.pdf',
+    declared_mime_type: 'application/pdf', content_base64: Buffer.from('%PDF-1.7 space B 2').toString('base64'),
+  }, ownerB);
+
+  // Consulta status operacional pelo Tenant A
+  const statusA = await executeMcpHttpRequest(gateway, {
+    method: 'GET', path: '/api/v1/operations/status', authContext: ownerA,
+  });
+  assert.equal(statusA.status, 200);
+  assert.equal(statusA.body.data.metrics.storage.attachments, 1);
+  assert.equal(statusA.body.data.metrics.storage.bytes, resultA.data.fileSize);
+
+  // Consulta status operacional pelo Tenant B
+  const statusB = await executeMcpHttpRequest(gateway, {
+    method: 'GET', path: '/api/v1/operations/status', authContext: ownerB,
+  });
+  assert.equal(statusB.status, 200);
+  assert.equal(statusB.body.data.metrics.storage.attachments, 2);
+  assert.equal(statusB.body.data.metrics.storage.bytes, resultB1.data.fileSize + resultB2.data.fileSize);
+});
+

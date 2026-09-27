@@ -48,15 +48,19 @@ export class AttachmentService {
     this.metrics = metrics;
   }
 
-  getStorageUsage() {
-    const usage = this.db.prepare(
-      'SELECT COUNT(*) AS attachments, COALESCE(SUM(file_size), 0) AS bytes FROM attachments WHERE deleted_at IS NULL',
-    ).get();
+  getStorageUsage(spaceId = null) {
+    let query = 'SELECT COUNT(*) AS attachments, COALESCE(SUM(file_size), 0) AS bytes FROM attachments WHERE deleted_at IS NULL';
+    const params = [];
+    if (spaceId) {
+      query += ' AND space_id = ?';
+      params.push(spaceId);
+    }
+    const usage = this.db.prepare(query).get(...params);
     return { attachments: usage.attachments, bytes: usage.bytes };
   }
 
-  _recordStorageUsage() {
-    this.metrics?.recordStorageUsage(this.getStorageUsage());
+  _recordStorageUsage(spaceId = null) {
+    this.metrics?.recordStorageUsage(this.getStorageUsage(spaceId));
   }
 
   hashDownloadToken(token) {
@@ -203,7 +207,7 @@ export class AttachmentService {
       entityId: id,
       newData
     });
-    this._recordStorageUsage();
+    this._recordStorageUsage(authContext?.spaceId);
 
     return { id, fileName: normalizedFileName, realMimeType, fileSize: buffer.length };
   }
@@ -345,7 +349,7 @@ export class AttachmentService {
     if (hardDelete) {
       await fs.rm(attachment.storage_path, { force: true });
       this.db.prepare('DELETE FROM attachments WHERE id = ? AND space_id = ?').run(attachment.id, authContext.spaceId);
-      this._recordStorageUsage();
+      this._recordStorageUsage(authContext?.spaceId);
     }
     return { id: attachment.id, deleted: true, hardDeleted: hardDelete };
   }
@@ -369,7 +373,7 @@ export class AttachmentService {
         entityId: attachment.id,
       });
     }
-    this._recordStorageUsage();
+    this._recordStorageUsage(authContext?.spaceId);
     return { purged: expired.length };
   }
 }

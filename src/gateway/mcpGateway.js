@@ -58,12 +58,17 @@ export class McpGateway {
 
   getOperationalStatus(authContext) {
     requireAuthorization(authContext, Permissions.AUDIT_READ);
-    if (this.attachmentService) {
-      this.metrics.recordStorageUsage(this.attachmentService.getStorageUsage());
-    }
+    const spaceStorage = this.attachmentService
+      ? this.attachmentService.getStorageUsage(authContext?.spaceId)
+      : { attachments: 0, bytes: 0 };
+    const snapshot = this.metrics.snapshot();
+    snapshot.storage = {
+      ...snapshot.storage,
+      ...spaceStorage,
+    };
     return {
       health: { status: 'ok' },
-      metrics: this.metrics.snapshot(),
+      metrics: snapshot,
     };
   }
 
