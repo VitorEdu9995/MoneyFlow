@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { apiExecute } from '../api';
-import { ArrowUpRight, ArrowDownRight, Wallet, TrendingUp, Building2, Clock } from 'lucide-react';
+import { ArrowUpRight, ArrowDownRight, Wallet, TrendingUp, Building2, Clock, Sparkles } from 'lucide-react';
 import { formatCurrency, formatDate } from '../utils/formatters';
 
 export default function Dashboard() {
@@ -61,13 +62,21 @@ export default function Dashboard() {
   return (
     <div className="space-y-8">
       {/* Cabeçalho da Página */}
-      <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2">
+      <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-azulFluxo">Visão Geral</h1>
           <p className="text-sm text-textoSecundario">
             Acompanhamento sereno do seu patrimônio e fluxo de movimentações.
           </p>
         </div>
+        <Link
+          to="/landing"
+          className="inline-flex items-center text-xs font-semibold px-3 py-1.5 rounded-lg border border-borda bg-superficie hover:bg-superficieSecundaria text-azulFluxo hover:text-azulFluxo transition-all self-start sm:self-auto shadow-suave"
+          title="Ver apresentação das funcionalidades do MoneyFlow"
+        >
+          <Sparkles className="w-3.5 h-3.5 mr-1.5 text-verdeEquilibrio" />
+          Conhecer Recursos do MoneyFlow
+        </Link>
       </div>
 
       {error && (
