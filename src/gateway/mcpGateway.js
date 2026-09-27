@@ -17,6 +17,7 @@ import { Permissions, requireAuthorization } from '../domain/authorization.js';
 import { randomUUID } from 'node:crypto';
 import { logger, redact, setMetricsCollector } from '../utils/logger.js';
 import { AttachmentService } from '../services/attachmentService.js';
+import { LgpdService } from '../services/lgpdService.js';
 import { OperationalMetrics } from '../observability/operationalMetrics.js';
 
 export const OPEN_FINANCE_DISABLED_TOOLS = new Set([
@@ -45,7 +46,7 @@ export class McpGateway {
    * @param {import('../services/spaceIsolationService.js').SpaceIsolationService} [options.service]
    * @param {ToolContractRegistry} [options.registry]
    */
-  constructor({ service, registry, attachmentService, metrics } = {}) {
+  constructor({ service, registry, attachmentService, lgpdService, metrics } = {}) {
     this.service = service;
     this.registry = registry || new ToolContractRegistry();
     this.extensionRegistry = new ExtensionToolContractRegistry();
@@ -54,6 +55,7 @@ export class McpGateway {
     this.service?.setMetrics?.(this.metrics);
     this.attachmentService = attachmentService || (service ? new AttachmentService(service.db, service, { metrics: this.metrics }) : null);
     this.attachmentService?.setMetrics?.(this.metrics);
+    this.lgpdService = lgpdService || (service ? new LgpdService(service.db, service, this.attachmentService) : null);
   }
 
   getOperationalStatus(authContext) {

@@ -43,6 +43,35 @@ export async function executeMcpHttpRequest(gateway, { method, path, body, authC
         }),
       };
     }
+
+    const lgpdExportMatch = url.pathname.match(/^\/api\/v1\/spaces\/([^/]+)\/lgpd\/export$/);
+    if (method === 'GET' && lgpdExportMatch) {
+      const targetSpaceId = decodeURIComponent(lgpdExportMatch[1]);
+      if (targetSpaceId !== authContext?.spaceId) {
+        throw new AppError(ErrorCodes.CROSS_SPACE_REFERENCE_DENIED, 'Acesso negado a espaço diferente do autenticado.', 403);
+      }
+      if (!gateway.lgpdService) {
+        throw new AppError(ErrorCodes.NOT_FOUND, 'Serviço LGPD não disponível.', 404);
+      }
+      const exportData = await gateway.lgpdService.exportSpaceData(authContext);
+      status = 200;
+      return { status, body: successResponse(exportData) };
+    }
+
+    const lgpdDeleteMatch = url.pathname.match(/^\/api\/v1\/spaces\/([^/]+)\/lgpd\/delete$/);
+    if (method === 'POST' && lgpdDeleteMatch) {
+      const targetSpaceId = decodeURIComponent(lgpdDeleteMatch[1]);
+      if (targetSpaceId !== authContext?.spaceId) {
+        throw new AppError(ErrorCodes.CROSS_SPACE_REFERENCE_DENIED, 'Acesso negado a espaço diferente do autenticado.', 403);
+      }
+      if (!gateway.lgpdService) {
+        throw new AppError(ErrorCodes.NOT_FOUND, 'Serviço LGPD não disponível.', 404);
+      }
+      const result = await gateway.lgpdService.deleteOrAnonymizeSpaceData(authContext, body || {});
+      status = 200;
+      return { status, body: successResponse(result) };
+    }
+
     if (method !== 'POST' || path !== '/api/v1/mcp/execute') {
       throw new AppError(ErrorCodes.METHOD_NOT_ALLOWED, 'Endpoint MCP disponível apenas em POST /api/v1/mcp/execute.', 405);
     }
