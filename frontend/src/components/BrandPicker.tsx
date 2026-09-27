@@ -4,11 +4,6 @@ export interface CardBrandItem {
   id: string;
   displayName: string;
   normalizedName: string;
-  logo?: {
-    assetId: string;
-    format: string;
-    localUrl: string;
-  } | null;
 }
 
 interface Props {
@@ -19,10 +14,8 @@ interface Props {
 
 export default function BrandPicker({ selectedBrand, onSelect, className = '' }: Props) {
   const [brands, setBrands] = useState<CardBrandItem[]>([]);
-  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    setLoading(true);
     const token = localStorage.getItem('token') || 'dummy-token';
 
     fetch('/api/v1/catalog/brands', {
@@ -35,7 +28,6 @@ export default function BrandPicker({ selectedBrand, onSelect, className = '' }:
         if (data.ok && Array.isArray(data.data)) {
           setBrands(data.data);
         } else {
-          // Fallback para bandeiras padrão
           setBrands([
             { id: '1', displayName: 'Mastercard', normalizedName: 'mastercard' },
             { id: '2', displayName: 'Visa', normalizedName: 'visa' },
@@ -52,13 +44,12 @@ export default function BrandPicker({ selectedBrand, onSelect, className = '' }:
           { id: '2', displayName: 'Visa', normalizedName: 'visa' },
           { id: '3', displayName: 'Elo', normalizedName: 'elo' },
         ]);
-      })
-      .finally(() => setLoading(false));
+      });
   }, []);
 
   return (
     <div className={`space-y-2 ${className}`}>
-      <label className="block text-sm font-medium text-textoSecundario">
+      <label className="block text-xs font-semibold text-texto uppercase tracking-wider">
         Bandeira do Cartão
       </label>
       <div className="grid grid-cols-3 gap-2">
@@ -69,10 +60,10 @@ export default function BrandPicker({ selectedBrand, onSelect, className = '' }:
               key={b.id}
               type="button"
               onClick={() => onSelect(isSelected ? null : b.displayName)}
-              className={`p-2 rounded-lg border text-xs font-semibold text-center transition-all ${
+              className={`p-2.5 rounded-lg border text-xs font-semibold text-center transition-all ${
                 isSelected
-                  ? 'border-verdeEquilibrio bg-verdeEquilibrio/20 text-white'
-                  : 'border-[#2A2A2A] bg-[#1A1A1A] text-gray-400 hover:text-white hover:border-[#444444]'
+                  ? 'border-verdeEquilibrio bg-verdeEquilibrio/10 text-verdeEquilibrioDark ring-1 ring-verdeEquilibrio'
+                  : 'border-borda bg-superficie text-textoSecundario hover:text-texto hover:border-bordaHover hover:bg-superficieSecundaria'
               }`}
             >
               {b.displayName}

@@ -3,6 +3,12 @@
 
 @layer base {
   body {
-    @apply bg-superficie text-texto font-sans tabular-nums;
+    @apply bg-nevoa text-texto font-sans tabular-nums antialiased;
+    color: #20313D;
+    background-color: #F5F8FA;
+  }
+
+  input, select, textarea, button {
+    @apply font-sans;
   }
 }
