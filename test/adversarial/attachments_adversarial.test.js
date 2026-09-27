@@ -22,6 +22,8 @@ async function setup() {
   db.exec(mig5.up);
   const mig6 = await import('../../src/db/migrations/006_attachments.js');
   db.exec(mig6.up);
+  const mig9 = await import('../../src/db/migrations/009_attachment_lifecycle.js');
+  db.exec(mig9.up);
 
   const iso = new SpaceIsolationService(db);
   const att = new AttachmentService(db, iso);

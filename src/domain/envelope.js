@@ -28,6 +28,7 @@ export const ErrorCodes = Object.freeze({
   IMPORT_INVALID_PAYLOAD: 'IMPORT_INVALID_PAYLOAD',
   INSUFFICIENT_FUNDS: 'INSUFFICIENT_FUNDS',
   INTERNAL_ERROR: 'INTERNAL_ERROR',
+  RATE_LIMITED: 'RATE_LIMITED',
 });
 
 export class AppError extends Error {

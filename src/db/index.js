@@ -16,6 +16,7 @@ import * as auditLogAppendOnly from './migrations/005_audit_log_append_only.js';
 import * as attachments from './migrations/006_attachments.js';
 import * as financialGoals from './migrations/007_financial_goals.js';
 import * as protectPiggyBankInternalTransactions from './migrations/008_protect_piggy_bank_internal_transactions.js';
+import * as attachmentLifecycle from './migrations/009_attachment_lifecycle.js';
 
 export const MIGRATIONS = [
   { id: '001_initial_schema', module: initialSchema },
@@ -26,6 +27,7 @@ export const MIGRATIONS = [
   { id: '006_attachments', module: attachments },
   { id: '007_financial_goals', module: financialGoals },
   { id: '008_protect_piggy_bank_internal_transactions', module: protectPiggyBankInternalTransactions },
+  { id: '009_attachment_lifecycle', module: attachmentLifecycle },
 ];
 
 /**

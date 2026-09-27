@@ -16,6 +16,7 @@ test('Migrations estruturais sobem em banco vazio com integridade e sem dados au
     '006_attachments',
     '007_financial_goals',
     '008_protect_piggy_bank_internal_transactions',
+    '009_attachment_lifecycle',
   ]);
 
   // Nenhuma tabela possui dados inseridos automaticamente
@@ -53,6 +54,7 @@ test('Migrations são reversíveis via rollback explícito', () => {
   runMigrations(db);
 
   // Reversão explícita na ordem de dependência (008 a 001).
+  rollbackMigration(db, '009_attachment_lifecycle');
   rollbackMigration(db, '008_protect_piggy_bank_internal_transactions');
   rollbackMigration(db, '007_financial_goals');
   rollbackMigration(db, '006_attachments');
@@ -110,4 +112,29 @@ test('Migration 008 adiciona marcador imutável para transferências internas de
   const marker = db.prepare('PRAGMA table_info(transactions)').all().find((column) => column.name === 'is_piggy_bank_internal');
   assert.equal(marker?.notnull, 1);
   assert.equal(marker?.dflt_value, '0');
+});
+
+test('Migration 009 aplica retenção padrão a anexo legado e pode ser revertida e reaplicada', () => {
+  const db = createDatabase(':memory:');
+  runMigrations(db);
+  rollbackMigration(db, '009_attachment_lifecycle');
+
+  db.exec("INSERT INTO users (id, email, name) VALUES ('legacy-user', 'legacy@test.dev', 'Legacy')");
+  db.exec("INSERT INTO spaces (id, name, owner_user_id) VALUES ('legacy-space', 'Legado', 'legacy-user')");
+  db.exec(`INSERT INTO attachments (
+    id, space_id, entity_type, entity_id, file_name, mime_type, real_mime_type, file_size, storage_path, uploaded_by
+  ) VALUES ('legacy-attachment', 'legacy-space', 'transaction', 'legacy-transaction', 'legacy.pdf', 'application/pdf', 'application/pdf', 10, '/tmp/legacy.pdf', 'legacy-user')`);
+
+  assert.deepEqual(runMigrations(db), ['009_attachment_lifecycle']);
+  const columns = db.prepare('PRAGMA table_info(attachments)').all().map((column) => column.name);
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((table) => table.name);
+  const indexes = db.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all().map((index) => index.name);
+  const legacy = db.prepare('SELECT expires_at FROM attachments WHERE id = ?').get('legacy-attachment');
+
+  assert.equal(columns.includes('expires_at'), true);
+  assert.equal(tables.includes('attachment_retention_policies'), true);
+  assert.equal(tables.includes('attachment_download_tokens'), true);
+  assert.equal(indexes.includes('idx_attachment_download_tokens_attachment'), true);
+  assert.equal(indexes.includes('idx_attachments_expiry'), true);
+  assert.match(legacy.expires_at, /^\d{4}-\d{2}-\d{2}T/);
 });

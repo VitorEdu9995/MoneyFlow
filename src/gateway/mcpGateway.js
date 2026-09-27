@@ -340,6 +340,9 @@ export class McpGateway {
       // 6. Anexos privados
       anexos_upload: this._handleAttachmentUpload,
       anexos_download: this._handleAttachmentDownload,
+      anexos_download_url: this._handleAttachmentDownloadUrl,
+      anexos_delete: this._handleAttachmentDelete,
+      anexos_purge_expired: this._handleAttachmentPurgeExpired,
 
       // 7. Metas financeiras e cofrinhos
       metas_create: this._handleMetasCreate,
@@ -380,6 +383,31 @@ export class McpGateway {
       file_name: attachment.fileName,
       file_size: attachment.buffer.length,
     };
+  }
+
+  async _handleAttachmentDownloadUrl(args, authContext) {
+    if (!this.attachmentService) {
+      throw new AppError(ErrorCodes.INTERNAL_ERROR, 'Serviço de anexos indisponível.', 500);
+    }
+    return this.attachmentService.createDownloadUrl(authContext, args.attachment_id, {
+      expiresInSeconds: args.expires_in_seconds,
+    });
+  }
+
+  async _handleAttachmentDelete(args, authContext) {
+    if (!this.attachmentService) {
+      throw new AppError(ErrorCodes.INTERNAL_ERROR, 'Serviço de anexos indisponível.', 500);
+    }
+    return this.attachmentService.deleteAttachment(authContext, args.attachment_id, {
+      hardDelete: args.hard_delete === true,
+    });
+  }
+
+  async _handleAttachmentPurgeExpired(_args, authContext) {
+    if (!this.attachmentService) {
+      throw new AppError(ErrorCodes.INTERNAL_ERROR, 'Serviço de anexos indisponível.', 500);
+    }
+    return this.attachmentService.purgeExpiredAttachments(authContext);
   }
 
   // =========================================================================
