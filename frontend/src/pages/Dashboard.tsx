@@ -1,20 +1,22 @@
 import { useState, useEffect } from 'react';
 import { apiExecute } from '../api';
-import { ArrowUpRight, ArrowDownRight, Wallet, CreditCard } from 'lucide-react';
+import { ArrowUpRight, ArrowDownRight, Wallet, TrendingUp, Building2, Clock } from 'lucide-react';
+import { formatCurrency, formatDate } from '../utils/formatters';
 
 export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [totalBalance, setTotalBalance] = useState(0);
-  const [monthlyIncome, setMonthlyIncome] = useState(0);
-  const [monthlyExpense, setMonthlyExpense] = useState(0);
+  const [totalBalanceCents, setTotalBalanceCents] = useState(0);
+  const [monthlyIncomeCents, setMonthlyIncomeCents] = useState(0);
+  const [monthlyExpenseCents, setMonthlyExpenseCents] = useState(0);
   const [accounts, setAccounts] = useState<any[]>([]);
   const [recentTransactions, setRecentTransactions] = useState<any[]>([]);
 
   useEffect(() => {
     async function loadDashboard() {
       setLoading(true);
+      setError(null);
       try {
         const now = new Date();
         const year = now.getFullYear();
@@ -32,16 +34,14 @@ export default function Dashboard() {
         const accList = Array.isArray(accountsData) ? accountsData : [];
         setAccounts(accList);
 
-        // Saldo total de todas as contas ativas em centavos
-        const totalCents = accList.reduce((acc, a) => acc + (a.current_balance || a.opening_balance || 0), 0);
-        setTotalBalance(totalCents / 100);
+        const totalCents = accList.reduce((acc, a) => acc + (a.current_balance ?? a.opening_balance ?? 0), 0);
+        setTotalBalanceCents(totalCents);
 
         if (summaryData) {
-          // summaryData.income e expense em centavos ou reais
-          const inc = (summaryData.income || 0) / (summaryData.income > 1000 ? 100 : 1);
-          const exp = (summaryData.expense || 0) / (summaryData.expense > 1000 ? 100 : 1);
-          setMonthlyIncome(inc);
-          setMonthlyExpense(exp);
+          const inc = summaryData.income || 0;
+          const exp = summaryData.expense || 0;
+          setMonthlyIncomeCents(inc);
+          setMonthlyExpenseCents(exp);
         }
 
         const txList = Array.isArray(transactionsData) ? transactionsData : [];
@@ -56,114 +56,175 @@ export default function Dashboard() {
     loadDashboard();
   }, []);
 
+  const netBalanceCents = monthlyIncomeCents - monthlyExpenseCents;
+
   return (
-    <div className="space-y-6">
-      <div>
-        <h2 className="text-2xl font-bold">Dashboard</h2>
-        <p className="text-textoSecundario text-sm">Visão geral consolidada do seu patrimônio e fluxo de caixa.</p>
+    <div className="space-y-8">
+      {/* Cabeçalho da Página */}
+      <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-azulFluxo">Visão Geral</h1>
+          <p className="text-sm text-textoSecundario">
+            Acompanhamento sereno do seu patrimônio e fluxo de movimentações.
+          </p>
+        </div>
       </div>
 
-      {error && <p className="text-erro mb-2">Erro ao carregar dados: {error}</p>}
+      {error && (
+        <div className="p-4 bg-erro/10 border border-erro/20 rounded-xl text-erro text-sm flex items-center justify-between">
+          <span>{error}</span>
+          <button onClick={() => window.location.reload()} className="underline font-semibold ml-4 text-xs">
+            Tentar novamente
+          </button>
+        </div>
+      )}
 
       {/* Cards de Métricas Principais */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {/* Saldo Total */}
-        <div className="bg-superficie p-6 rounded-xl border border-[#2A2A2A] space-y-2">
-          <div className="flex items-center justify-between text-textoSecundario">
-            <span className="text-sm font-medium">Saldo em Contas</span>
-            <Wallet className="w-5 h-5 text-mentaClara" />
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+        {/* Saldo Consolidado */}
+        <div className="bg-superficie p-6 rounded-xl border border-borda shadow-suave hover:shadow-card transition-shadow">
+          <div className="flex items-center justify-between text-textoSecundario mb-3">
+            <span className="text-xs font-semibold uppercase tracking-wider">Saldo Total em Contas</span>
+            <div className="w-8 h-8 rounded-lg bg-nevoa flex items-center justify-center text-azulFluxo">
+              <Wallet className="w-4 h-4" />
+            </div>
           </div>
-          <p className="text-3xl font-extrabold text-white">
-            {loading ? '...' : `R$ ${totalBalance.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`}
+          <p className="text-3xl font-extrabold text-azulFluxo tracking-tight">
+            {loading ? '...' : formatCurrency(totalBalanceCents, true)}
           </p>
-          <span className="text-xs text-textoSecundario">{accounts.length} contas cadastradas</span>
+          <div className="mt-3 flex items-center text-xs text-textoSecundario">
+            <span className="font-medium text-texto">{accounts.length}</span>
+            <span className="ml-1">contas ativas</span>
+          </div>
         </div>
 
         {/* Receitas do Mês */}
-        <div className="bg-superficie p-6 rounded-xl border border-[#2A2A2A] space-y-2">
-          <div className="flex items-center justify-between text-textoSecundario">
-            <span className="text-sm font-medium">Receitas (Mês Atual)</span>
-            <ArrowUpRight className="w-5 h-5 text-verdeEquilibrio" />
+        <div className="bg-superficie p-6 rounded-xl border border-borda shadow-suave hover:shadow-card transition-shadow">
+          <div className="flex items-center justify-between text-textoSecundario mb-3">
+            <span className="text-xs font-semibold uppercase tracking-wider">Receitas do Mês</span>
+            <div className="w-8 h-8 rounded-lg bg-verdeEquilibrio/10 flex items-center justify-center text-verdeEquilibrio">
+              <ArrowUpRight className="w-4 h-4" />
+            </div>
           </div>
-          <p className="text-3xl font-extrabold text-verdeEquilibrio">
-            {loading ? '...' : `+ R$ ${monthlyIncome.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`}
+          <p className="text-3xl font-extrabold text-verdeEquilibrio tracking-tight">
+            {loading ? '...' : `+ ${formatCurrency(monthlyIncomeCents, true)}`}
           </p>
-          <span className="text-xs text-textoSecundario">Base caixa</span>
+          <div className="mt-3 flex items-center text-xs text-textoSecundario">
+            <span className="inline-block w-2 h-2 rounded-full bg-verdeEquilibrio mr-1.5"></span>
+            Base caixa confirmada
+          </div>
         </div>
 
         {/* Despesas do Mês */}
-        <div className="bg-superficie p-6 rounded-xl border border-[#2A2A2A] space-y-2">
-          <div className="flex items-center justify-between text-textoSecundario">
-            <span className="text-sm font-medium">Despesas (Mês Atual)</span>
-            <ArrowDownRight className="w-5 h-5 text-erro" />
+        <div className="bg-superficie p-6 rounded-xl border border-borda shadow-suave hover:shadow-card transition-shadow">
+          <div className="flex items-center justify-between text-textoSecundario mb-3">
+            <span className="text-xs font-semibold uppercase tracking-wider">Despesas do Mês</span>
+            <div className="w-8 h-8 rounded-lg bg-erro/10 flex items-center justify-center text-erro">
+              <ArrowDownRight className="w-4 h-4" />
+            </div>
           </div>
-          <p className="text-3xl font-extrabold text-erro">
-            {loading ? '...' : `- R$ ${monthlyExpense.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`}
+          <p className="text-3xl font-extrabold text-erro tracking-tight">
+            {loading ? '...' : `- ${formatCurrency(monthlyExpenseCents, true)}`}
           </p>
-          <span className="text-xs text-textoSecundario">Base caixa</span>
+          <div className="mt-3 flex items-center text-xs text-textoSecundario">
+            <span className="inline-block w-2 h-2 rounded-full bg-erro mr-1.5"></span>
+            Resultado: {formatCurrency(netBalanceCents, true)}
+          </div>
         </div>
       </div>
 
-      {/* Contas e Transações Recentes */}
+      {/* Grid: Contas e Últimas Movimentações */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Minhas Contas */}
-        <div className="bg-superficie p-6 rounded-xl border border-[#2A2A2A] space-y-4">
-          <h3 className="font-bold text-lg text-white">Contas Bancárias</h3>
+        {/* Contas Bancárias */}
+        <div className="bg-superficie p-6 rounded-xl border border-borda shadow-suave space-y-4">
+          <div className="flex items-center justify-between pb-3 border-b border-borda">
+            <div className="flex items-center space-x-2">
+              <Building2 className="w-4 h-4 text-azulFluxo" />
+              <h2 className="font-bold text-base text-azulFluxo">Minhas Contas</h2>
+            </div>
+            <span className="text-xs text-textoSecundario">{accounts.length} cadastradas</span>
+          </div>
+
           {accounts.length === 0 && !loading && (
-            <p className="text-sm text-textoSecundario">Nenhuma conta cadastrada ainda.</p>
+            <div className="text-center py-10 bg-superficieSecundaria rounded-lg border border-dashed border-borda">
+              <p className="text-sm text-textoSecundario">Nenhuma conta cadastrada ainda.</p>
+              <p className="text-xs text-textoMudo mt-1">Crie sua primeira conta no menu Contas.</p>
+            </div>
           )}
-          <div className="space-y-3">
+
+          <div className="space-y-2.5">
             {accounts.slice(0, 4).map((acc) => (
-              <div key={acc.id} className="flex items-center justify-between p-3 bg-[#1A1A1A] rounded-lg border border-[#2A2A2A]">
-                <div className="flex items-center space-x-3">
-                  <div className="w-8 h-8 rounded-full bg-[#262626] border border-[#3A3A3A] flex items-center justify-center overflow-hidden">
+              <div
+                key={acc.id}
+                className="flex items-center justify-between p-3.5 bg-superficieSecundaria hover:bg-nevoa rounded-lg border border-borda transition-colors"
+              >
+                <div className="flex items-center space-x-3 min-w-0">
+                  <div className="w-9 h-9 rounded-full bg-white border border-borda flex items-center justify-center overflow-hidden flex-shrink-0 shadow-xs">
                     {acc.institution_id ? (
                       <img
                         src={`/api/v1/catalog/logos/${acc.institution_id}`}
                         alt="Logo"
-                        className="w-full h-full object-contain p-0.5"
+                        className="w-full h-full object-contain p-1"
                         onError={(e) => {
                           (e.currentTarget as HTMLElement).style.display = 'none';
                         }}
                       />
                     ) : (
-                      <span className="text-xs font-bold text-gray-400">
+                      <span className="text-xs font-bold text-azulFluxo">
                         {acc.name ? acc.name.slice(0, 2).toUpperCase() : 'CC'}
                       </span>
                     )}
                   </div>
-                  <div>
-                    <p className="text-sm font-semibold text-white">{acc.name}</p>
-                    <p className="text-xs text-textoSecundario capitalize">{acc.account_type || 'checking'}</p>
+                  <div className="truncate">
+                    <p className="text-sm font-semibold text-texto truncate">{acc.name}</p>
+                    <p className="text-xs text-textoSecundario capitalize">{acc.account_type || 'Conta Corrente'}</p>
                   </div>
                 </div>
-                <p className="text-sm font-bold text-mentaClara">
-                  R$ {(((acc.current_balance ?? acc.opening_balance ?? 0) / 100)).toFixed(2)}
+                <p className="text-sm font-bold text-azulFluxo flex-shrink-0 ml-3">
+                  {formatCurrency(acc.current_balance ?? acc.opening_balance ?? 0, true)}
                 </p>
               </div>
             ))}
           </div>
         </div>
 
-        {/* Transações Recentes */}
-        <div className="bg-superficie p-6 rounded-xl border border-[#2A2A2A] space-y-4">
-          <h3 className="font-bold text-lg text-white">Últimas Transações</h3>
+        {/* Últimas Movimentações */}
+        <div className="bg-superficie p-6 rounded-xl border border-borda shadow-suave space-y-4">
+          <div className="flex items-center justify-between pb-3 border-b border-borda">
+            <div className="flex items-center space-x-2">
+              <Clock className="w-4 h-4 text-azulFluxo" />
+              <h2 className="font-bold text-base text-azulFluxo">Últimas Movimentações</h2>
+            </div>
+            <span className="text-xs text-textoSecundario">Recentes</span>
+          </div>
+
           {recentTransactions.length === 0 && !loading && (
-            <p className="text-sm text-textoSecundario">Nenhuma transação registrada.</p>
+            <div className="text-center py-10 bg-superficieSecundaria rounded-lg border border-dashed border-borda">
+              <p className="text-sm text-textoSecundario">Nenhuma movimentação registrada.</p>
+              <p className="text-xs text-textoMudo mt-1">Lançamentos recentes aparecerão aqui.</p>
+            </div>
           )}
-          <div className="space-y-3">
+
+          <div className="space-y-2.5">
             {recentTransactions.map((tx, idx) => {
-              const amountReais = (tx.amount || 0) / 100;
               const isIncome = tx.type === 'income' || (tx.amount > 0 && tx.type !== 'expense');
 
               return (
-                <div key={tx.id || idx} className="flex items-center justify-between p-3 bg-[#1A1A1A] rounded-lg border border-[#2A2A2A]">
-                  <div>
-                    <p className="text-sm font-semibold text-white">{tx.description}</p>
-                    <p className="text-xs text-textoSecundario">{tx.transaction_date || tx.date}</p>
+                <div
+                  key={tx.id || idx}
+                  className="flex items-center justify-between p-3.5 bg-superficieSecundaria hover:bg-nevoa rounded-lg border border-borda transition-colors"
+                >
+                  <div className="min-w-0 pr-3">
+                    <p className="text-sm font-semibold text-texto truncate">{tx.description}</p>
+                    <p className="text-xs text-textoSecundario">{formatDate(tx.transaction_date || tx.date)}</p>
                   </div>
-                  <span className={`text-sm font-bold ${isIncome ? 'text-verdeEquilibrio' : 'text-erro'}`}>
-                    {isIncome ? '+' : '-'} R$ {Math.abs(amountReais).toFixed(2)}
+                  <span
+                    className={`text-sm font-bold flex-shrink-0 ${
+                      isIncome ? 'text-verdeEquilibrio' : 'text-erro'
+                    }`}
+                  >
+                    {isIncome ? '+ ' : '- '}
+                    {formatCurrency(Math.abs(tx.amount || 0), true)}
                   </span>
                 </div>
               );

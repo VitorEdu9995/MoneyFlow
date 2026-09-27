@@ -46,7 +46,6 @@ export default function InstitutionLogoPicker({ selectedInstitutionId, onSelect,
         if (data.ok && data.data?.institutions) {
           setInstitutions(data.data.institutions);
         } else {
-          // Fallback para array vazio
           setInstitutions([]);
         }
       })
@@ -63,10 +62,6 @@ export default function InstitutionLogoPicker({ selectedInstitutionId, onSelect,
     };
   }, [query]);
 
-  const selectedInst = useMemo(() => {
-    return institutions.find(i => i.id === selectedInstitutionId);
-  }, [institutions, selectedInstitutionId]);
-
   const getInitials = (name: string) => {
     if (!name) return '??';
     const parts = name.trim().split(/\s+/);
@@ -79,9 +74,9 @@ export default function InstitutionLogoPicker({ selectedInstitutionId, onSelect,
   };
 
   return (
-    <div className={`space-y-3 ${className}`}>
-      <label className="block text-sm font-medium text-textoSecundario">
-        Instituição Financeira / Banco
+    <div className={`space-y-2.5 ${className}`}>
+      <label className="block text-xs font-semibold text-texto uppercase tracking-wider">
+        Instituição Bancária
       </label>
 
       {/* Input de Busca */}
@@ -91,23 +86,23 @@ export default function InstitutionLogoPicker({ selectedInstitutionId, onSelect,
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Buscar banco ou instituição (ex: Nubank, Inter, Itaú)..."
-          className="w-full bg-[#1A1A1A] border border-[#333333] rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-verdeEquilibrio"
+          className="w-full bg-superficie border border-borda rounded-lg px-3.5 py-2.5 text-sm text-texto placeholder:text-textoMudo focus:outline-none focus:ring-2 focus:ring-verdeEquilibrio focus:border-verdeEquilibrio shadow-sm transition-all"
         />
         {loading && (
-          <span className="absolute right-3 top-2.5 text-xs text-gray-400">Buscando...</span>
+          <span className="absolute right-3.5 top-3 text-xs text-textoSecundario font-medium">Buscando...</span>
         )}
       </div>
 
-      {error && <p className="text-xs text-erro">{error}</p>}
+      {error && <p className="text-xs text-erro font-medium">{error}</p>}
 
-      {/* Grid de Seleção */}
+      {/* Lista de Seleção */}
       <div
         role="listbox"
         aria-label="Instituições financeiras"
-        className="max-h-56 overflow-y-auto space-y-1.5 p-1 border border-[#2A2A2A] rounded-lg bg-[#141414]"
+        className="max-h-56 overflow-y-auto space-y-1 p-1.5 border border-borda rounded-lg bg-superficie shadow-inner"
       >
         {institutions.length === 0 && !loading && (
-          <p className="text-xs text-center text-textoSecundario py-4">Nenhuma instituição encontrada.</p>
+          <p className="text-xs text-center text-textoSecundario py-5">Nenhuma instituição encontrada com este termo.</p>
         )}
 
         {institutions.map((inst) => {
@@ -128,44 +123,44 @@ export default function InstitutionLogoPicker({ selectedInstitutionId, onSelect,
                   onSelect(isSelected ? null : inst);
                 }
               }}
-              className={`w-full flex items-center justify-between p-2 rounded-md transition-colors text-left ${
+              className={`w-full flex items-center justify-between p-2.5 rounded-lg transition-all text-left ${
                 isSelected
-                  ? 'bg-verdeEquilibrio/20 border border-verdeEquilibrio text-white'
-                  : 'hover:bg-[#222222] text-gray-300'
+                  ? 'bg-verdeEquilibrio/10 border border-verdeEquilibrio text-verdeEquilibrioDark font-medium'
+                  : 'hover:bg-superficieSecundaria border border-transparent text-texto'
               }`}
             >
-              <div className="flex items-center space-x-3">
+              <div className="flex items-center space-x-3 min-w-0">
                 {/* Logo ou Monograma */}
-                <div className="w-8 h-8 rounded-full bg-[#262626] flex items-center justify-center overflow-hidden border border-[#3A3A3A] flex-shrink-0">
+                <div className="w-8 h-8 rounded-full bg-white border border-borda flex items-center justify-center overflow-hidden flex-shrink-0 shadow-xs">
                   {hasLogo ? (
                     <img
                       src={inst.logo!.localUrl}
                       alt={`Logo ${inst.popularName}`}
-                      className="w-full h-full object-contain p-0.5"
+                      className="w-full h-full object-contain p-1"
                       onError={() => handleImageError(inst.id)}
                     />
                   ) : (
-                    <span className="text-xs font-semibold text-gray-300">
+                    <span className="text-[11px] font-bold text-azulFluxo">
                       {getInitials(inst.popularName)}
                     </span>
                   )}
                 </div>
 
-                <div>
-                  <div className="flex items-center space-x-1.5">
-                    <span className="text-sm font-medium">{inst.popularName}</span>
+                <div className="truncate">
+                  <div className="flex items-center space-x-1.5 truncate">
+                    <span className="text-sm font-semibold truncate text-texto">{inst.popularName}</span>
                     {inst.isFavorite && (
-                      <span className="text-[10px] bg-yellow-500/20 text-yellow-300 px-1 rounded font-medium">★</span>
+                      <span className="text-xs text-atencao font-bold" title="Favorito">★</span>
                     )}
                   </div>
                   {inst.ispb && (
-                    <span className="text-[11px] text-gray-500">ISPB: {inst.ispb}</span>
+                    <span className="text-[11px] text-textoSecundario block">ISPB: {inst.ispb}</span>
                   )}
                 </div>
               </div>
 
               {isSelected && (
-                <span className="text-verdeEquilibrio text-sm font-bold mr-1">✓</span>
+                <span className="text-verdeEquilibrio text-sm font-bold flex-shrink-0 ml-2">✓</span>
               )}
             </button>
           );
