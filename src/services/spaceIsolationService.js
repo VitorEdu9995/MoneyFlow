@@ -3010,6 +3010,21 @@ export class SpaceIsolationService {
     requireAuthorization(authContext, Permissions.GOALS_WRITE);
     const existing = this._getGoal(authContext, goalId);
     this._runAtomic(() => {
+      if (existing.goal_type === 'savings') {
+        const piggyBank = this.db
+          .prepare(
+            `SELECT a.current_balance
+             FROM piggy_banks pb
+             JOIN accounts a ON a.id = pb.account_id
+             WHERE pb.goal_id = ? AND pb.space_id = ?`,
+          )
+          .get(goalId, authContext.spaceId);
+
+        if (!piggyBank || Number(piggyBank.current_balance) !== 0) {
+          throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Não é possível excluir um cofrinho com saldo. Faça um saque até o saldo ficar zerado.', 400);
+        }
+      }
+
       this.db.prepare("UPDATE goals SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND space_id = ?").run(goalId, authContext.spaceId);
       this.logAudit({ spaceId: authContext.spaceId, actorUserId: authContext.userId, action: 'goal.delete', entityType: 'goals', entityId: goalId, oldData: existing });
     });

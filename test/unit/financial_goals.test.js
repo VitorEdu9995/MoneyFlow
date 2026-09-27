@@ -113,6 +113,46 @@ test('metas: transferência interna legada sem marcador também não pode ser ex
   assert.equal(service.getAccount(ownerCtx, origem.id).current_balance, 100000);
 });
 
+test('metas: não exclui cofrinho com saldo positivo', async () => {
+  const { service, gateway, ownerCtx } = setup();
+  const origem = service.createAccount(ownerCtx, { name: 'Corrente', openingBalance: 100000 });
+  const goal = (await gateway.executeTool('metas_create', {
+    name: 'Reserva', goal_type: 'savings', target_amount: 2000,
+    start_date: '2026-01-01', deadline: '2026-12-31',
+  }, ownerCtx)).data;
+
+  await gateway.executeTool('cofrinho_deposit', {
+    goal_id: goal.id, source_account_id: origem.id, amount: 100, date: '2026-02-01',
+  }, ownerCtx);
+
+  await assert.rejects(
+    () => gateway.executeTool('metas_delete', { id: goal.id }, ownerCtx),
+    { code: ErrorCodes.VALIDATION_ERROR },
+  );
+  assert.equal((await gateway.executeTool('list_metas', { limit: 10, offset: 0 }, ownerCtx)).data.length, 1);
+  assert.equal((await gateway.executeTool('get_goal_progress', { id: goal.id }, ownerCtx)).data.current_amount, 10000);
+});
+
+test('metas: permite excluir cofrinho depois de sacar todo o saldo', async () => {
+  const { service, gateway, ownerCtx } = setup();
+  const origem = service.createAccount(ownerCtx, { name: 'Corrente', openingBalance: 100000 });
+  const goal = (await gateway.executeTool('metas_create', {
+    name: 'Reserva', goal_type: 'savings', target_amount: 2000,
+    start_date: '2026-01-01', deadline: '2026-12-31',
+  }, ownerCtx)).data;
+
+  await gateway.executeTool('cofrinho_deposit', {
+    goal_id: goal.id, source_account_id: origem.id, amount: 100, date: '2026-02-01',
+  }, ownerCtx);
+  await gateway.executeTool('cofrinho_withdraw', {
+    goal_id: goal.id, destination_account_id: origem.id, amount: 100, date: '2026-02-02',
+  }, ownerCtx);
+
+  assert.equal((await gateway.executeTool('get_goal_progress', { id: goal.id }, ownerCtx)).data.current_amount, 0);
+  assert.deepEqual((await gateway.executeTool('metas_delete', { id: goal.id }, ownerCtx)).data, { deleted: true, id: goal.id });
+  assert.equal((await gateway.executeTool('list_metas', { limit: 10, offset: 0 }, ownerCtx)).data.length, 0);
+});
+
 test('metas: gasto requer categoria e mede despesas no período', async () => {
   const { service, gateway, ownerCtx } = setup();
   const account = service.createAccount(ownerCtx, { name: 'Conta', openingBalance: 0 });
