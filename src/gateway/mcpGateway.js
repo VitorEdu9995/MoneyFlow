@@ -15,8 +15,9 @@ import { ExtensionToolContractRegistry } from '../contracts/extensionToolRegistr
 import { AppError, ErrorCodes } from '../domain/envelope.js';
 import { Permissions, requireAuthorization } from '../domain/authorization.js';
 import { randomUUID } from 'node:crypto';
-import { logger, redact } from '../utils/logger.js';
+import { logger, redact, setMetricsCollector } from '../utils/logger.js';
 import { AttachmentService } from '../services/attachmentService.js';
+import { OperationalMetrics } from '../observability/operationalMetrics.js';
 
 export const OPEN_FINANCE_DISABLED_TOOLS = new Set([
   'get_latest_imports',
@@ -40,11 +41,26 @@ export class McpGateway {
    * @param {import('../services/spaceIsolationService.js').SpaceIsolationService} [options.service]
    * @param {ToolContractRegistry} [options.registry]
    */
-  constructor({ service, registry, attachmentService } = {}) {
+  constructor({ service, registry, attachmentService, metrics } = {}) {
     this.service = service;
     this.registry = registry || new ToolContractRegistry();
     this.extensionRegistry = new ExtensionToolContractRegistry();
-    this.attachmentService = attachmentService || (service ? new AttachmentService(service.db, service) : null);
+    this.metrics = metrics || new OperationalMetrics();
+    setMetricsCollector(this.metrics);
+    this.service?.setMetrics?.(this.metrics);
+    this.attachmentService = attachmentService || (service ? new AttachmentService(service.db, service, { metrics: this.metrics }) : null);
+    this.attachmentService?.setMetrics?.(this.metrics);
+  }
+
+  getOperationalStatus(authContext) {
+    requireAuthorization(authContext, Permissions.AUDIT_READ);
+    if (this.attachmentService) {
+      this.metrics.recordStorageUsage(this.attachmentService.getStorageUsage());
+    }
+    return {
+      health: { status: 'ok' },
+      metrics: this.metrics.snapshot(),
+    };
   }
 
   /**

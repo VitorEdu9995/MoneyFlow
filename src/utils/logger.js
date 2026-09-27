@@ -13,6 +13,16 @@ export const SENSITIVE_KEYS = new Set([
   'credit_card',
 ]);
 
+let metricsCollector = null;
+
+export function setMetricsCollector(collector) {
+  metricsCollector = collector && typeof collector.recordRedaction === 'function' ? collector : null;
+}
+
+function recordRedaction() {
+  try { metricsCollector?.recordRedaction(); } catch { /* telemetria não afeta o log */ }
+}
+
 const SK_REGEX = /sk-[a-zA-Z0-9_-]+/g;
 const TOKEN_REGEX = /Bearer\s+[a-zA-Z0-9\-\._~]+/gi;
 const CREDIT_CARD_REGEX = /\b(?:\d[ -]*?){13,16}\b/g;
@@ -24,6 +34,7 @@ export function redact(obj) {
     let redactedStr = obj.replace(SK_REGEX, '[REDACTED]');
     redactedStr = redactedStr.replace(TOKEN_REGEX, 'Bearer [REDACTED]');
     redactedStr = redactedStr.replace(CREDIT_CARD_REGEX, '[REDACTED]');
+    if (redactedStr !== obj) recordRedaction();
     return redactedStr;
   }
 
@@ -45,6 +56,7 @@ export function redact(obj) {
         lowerKey.includes('api_key')
       ) {
         redactedObj[key] = '[REDACTED]';
+        recordRedaction();
       } else {
         redactedObj[key] = redact(obj[key]);
       }

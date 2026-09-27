@@ -31,10 +31,26 @@ const DOWNLOAD_URL_RATE_LIMIT = 30;
 const DOWNLOAD_URL_RATE_WINDOW_MS = 60 * 1000;
 
 export class AttachmentService {
-  constructor(db, spaceIsolationService) {
+  constructor(db, spaceIsolationService, { metrics = null } = {}) {
     this.db = db;
     this.spaceIsolationService = spaceIsolationService;
     this.downloadUrlRequests = new Map();
+    this.metrics = metrics;
+  }
+
+  setMetrics(metrics) {
+    this.metrics = metrics;
+  }
+
+  getStorageUsage() {
+    const usage = this.db.prepare(
+      'SELECT COUNT(*) AS attachments, COALESCE(SUM(file_size), 0) AS bytes FROM attachments WHERE deleted_at IS NULL',
+    ).get();
+    return { attachments: usage.attachments, bytes: usage.bytes };
+  }
+
+  _recordStorageUsage() {
+    this.metrics?.recordStorageUsage(this.getStorageUsage());
   }
 
   hashDownloadToken(token) {
@@ -63,6 +79,7 @@ export class AttachmentService {
     const now = Date.now();
     const requests = (this.downloadUrlRequests.get(key) || []).filter((timestamp) => timestamp > now - DOWNLOAD_URL_RATE_WINDOW_MS);
     if (requests.length >= DOWNLOAD_URL_RATE_LIMIT) {
+      this.metrics?.recordRateLimit({ scope: 'attachment_download_url' });
       throw new AppError(ErrorCodes.RATE_LIMITED, 'Limite de geração de URLs temporárias excedido. Tente novamente em breve.', 429);
     }
     requests.push(now);
@@ -151,6 +168,7 @@ export class AttachmentService {
       await fs.writeFile(storagePath, buffer, { flag: 'wx' });
     } catch (error) {
       this.db.prepare('DELETE FROM attachments WHERE id = ? AND space_id = ?').run(id, authContext.spaceId);
+      this.metrics?.recordStorageFailure();
       throw error;
     }
 
@@ -164,6 +182,7 @@ export class AttachmentService {
       entityId: id,
       newData
     });
+    this._recordStorageUsage();
 
     return { id, fileName: normalizedFileName, realMimeType, fileSize: buffer.length };
   }
@@ -305,6 +324,7 @@ export class AttachmentService {
     if (hardDelete) {
       await fs.rm(attachment.storage_path, { force: true });
       this.db.prepare('DELETE FROM attachments WHERE id = ? AND space_id = ?').run(attachment.id, authContext.spaceId);
+      this._recordStorageUsage();
     }
     return { id: attachment.id, deleted: true, hardDeleted: hardDelete };
   }
@@ -328,6 +348,7 @@ export class AttachmentService {
         entityId: attachment.id,
       });
     }
+    this._recordStorageUsage();
     return { purged: expired.length };
   }
 }

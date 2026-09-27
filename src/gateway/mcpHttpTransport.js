@@ -1,9 +1,24 @@
 import { AppError, ErrorCodes, errorResponse, successResponse } from '../domain/envelope.js';
 
+const SECURITY_ERROR_CODES = new Set([
+  ErrorCodes.UNAUTHENTICATED,
+  ErrorCodes.FORBIDDEN,
+  ErrorCodes.INVALID_ROLE,
+  ErrorCodes.CROSS_SPACE_REFERENCE_DENIED,
+]);
+
 export async function executeMcpHttpRequest(gateway, { method, path, body, authContext }) {
   const context = authContext || {};
+  const startedAt = Date.now();
+  let status = 500;
+  let isOperationalStatusRequest = false;
   try {
     const url = new URL(path, 'http://moneyflow.local');
+    if (method === 'GET' && url.pathname === '/api/v1/operations/status') {
+      isOperationalStatusRequest = true;
+      status = 200;
+      return { status, body: successResponse(gateway.getOperationalStatus(context)) };
+    }
     const temporaryDownload = url.pathname.match(/^\/api\/v1\/attachments\/([^/]+)\/download$/);
     if (method === 'GET' && temporaryDownload) {
       const token = url.searchParams.get('token');
@@ -15,8 +30,9 @@ export async function executeMcpHttpRequest(gateway, { method, path, body, authC
         decodeURIComponent(temporaryDownload[1]),
         token,
       );
+      status = 200;
       return {
-        status: 200,
+        status,
         body: successResponse({
           content_base64: attachment.buffer.toString('base64'),
           mime_type: attachment.mimeType,
@@ -34,17 +50,29 @@ export async function executeMcpHttpRequest(gateway, { method, path, body, authC
 
     // O contexto vem do middleware autenticado do servidor, nunca do corpo MCP.
     const result = await gateway.executeTool(body.toolName, body.args, context);
+    status = 200;
     return {
-      status: 200,
+      status,
       body: successResponse(result, { requestId: context.requestId || null }),
     };
   } catch (error) {
     const appError = error instanceof AppError
       ? error
       : new AppError(ErrorCodes.INTERNAL_ERROR, 'Ocorreu um erro interno no gateway MCP.', 500);
-    return {
-      status: appError.status,
-      body: errorResponse(appError, context),
-    };
+    status = appError.status;
+    if (SECURITY_ERROR_CODES.has(appError.code)) {
+      gateway.metrics?.recordSecurityFailure({
+        category: appError.code === ErrorCodes.CROSS_SPACE_REFERENCE_DENIED ? 'idor' : 'authorization',
+      });
+    }
+    const responseBody = errorResponse(appError, isOperationalStatusRequest ? {} : context);
+    if (isOperationalStatusRequest) {
+      delete responseBody.meta.spaceId;
+      delete responseBody.meta.userId;
+      delete responseBody.meta.requestId;
+    }
+    return { status, body: responseBody };
+  } finally {
+    gateway.metrics?.recordApiRequest({ status, latencyMs: Date.now() - startedAt });
   }
 }
