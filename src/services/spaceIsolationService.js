@@ -628,17 +628,25 @@ export class SpaceIsolationService {
       transactionDate,
       observation = null,
       tags = [],
+      _allowPiggy = false,
     },
   ) {
     requireAuthorization(authContext, Permissions.TRANSACTIONS_WRITE);
 
     // Validação de Cross-Space em todas as FKs
     if (accountId) {
-      const acc = this.db.prepare('SELECT space_id FROM accounts WHERE id = ?').get(accountId);
+      const acc = this.db.prepare('SELECT space_id, is_piggy_bank FROM accounts WHERE id = ?').get(accountId);
       if (!acc || acc.space_id !== authContext.spaceId) {
         throw new AppError(
           ErrorCodes.CROSS_SPACE_REFERENCE_DENIED,
           'Conta pertence a outro espaço ou não existe.',
+          403,
+        );
+      }
+      if (acc.is_piggy_bank && !_allowPiggy) {
+        throw new AppError(
+          ErrorCodes.CROSS_SPACE_REFERENCE_DENIED,
+          'Conta-cofrinho só pode ser movimentada pelas operações de aporte e saque.',
           403,
         );
       }
@@ -1013,6 +1021,7 @@ export class SpaceIsolationService {
         accountId: sourceAccountId,
         destinationAccountId,
         transactionDate: transferDate,
+        _allowPiggy,
       });
 
       this.createTransaction(authContext, {
@@ -1022,6 +1031,7 @@ export class SpaceIsolationService {
         amount,
         accountId: destinationAccountId,
         transactionDate: transferDate,
+        _allowPiggy,
       });
 
       this.db

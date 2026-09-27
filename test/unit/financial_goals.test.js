@@ -34,6 +34,32 @@ test('metas: cria cofrinho, aporta e o patrimônio ignora sua conta', async () =
   assert.equal(service.getAuditLogs(ownerCtx).some((item) => item.action === 'piggy_bank.deposit'), true);
 });
 
+test('metas: criação pública de transação não movimenta conta-cofrinho', async () => {
+  const { service, gateway, ownerCtx } = setup();
+  const origem = service.createAccount(ownerCtx, { name: 'Corrente', openingBalance: 100000 });
+  const goal = (await gateway.executeTool('metas_create', {
+    name: 'Reserva', goal_type: 'savings', target_amount: 2000,
+    start_date: '2026-01-01', deadline: '2026-12-31',
+  }, ownerCtx)).data;
+
+  await assert.rejects(
+    () => gateway.executeTool('create_transaction', {
+      description: 'Tentativa direta', amount: 100, date: '2026-02-01',
+      account_name: goal.piggy_bank.account_id, is_income: false, _allowPiggy: true,
+    }, ownerCtx),
+    { code: ErrorCodes.CROSS_SPACE_REFERENCE_DENIED },
+  );
+
+  await gateway.executeTool('cofrinho_deposit', {
+    goal_id: goal.id, source_account_id: origem.id, amount: 100, date: '2026-02-01',
+  }, ownerCtx);
+  assert.equal((await gateway.executeTool('get_goal_progress', { id: goal.id }, ownerCtx)).data.current_amount, 10000);
+  await gateway.executeTool('cofrinho_withdraw', {
+    goal_id: goal.id, destination_account_id: origem.id, amount: 100, date: '2026-02-02',
+  }, ownerCtx);
+  assert.equal((await gateway.executeTool('get_goal_progress', { id: goal.id }, ownerCtx)).data.current_amount, 0);
+});
+
 test('metas: gasto requer categoria e mede despesas no período', async () => {
   const { service, gateway, ownerCtx } = setup();
   const account = service.createAccount(ownerCtx, { name: 'Conta', openingBalance: 0 });

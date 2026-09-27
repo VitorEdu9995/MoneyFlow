@@ -125,6 +125,7 @@ test('Fase 4 — get_financial_summary: pagamento de fatura aparece no caixa; co
   assert.equal(result.status, 'ok');
   // O pagamento de fatura (card_payment) deve entrar no caixa como despesa
   assert.ok(result.data.cashflow.expense >= 50000, 'pagamento de fatura deve aparecer como despesa no caixa');
+  assert.deepEqual(result.data.topExpenses.map((expense) => expense.description), ['Notebook']);
 });
 
 // =========================================================================

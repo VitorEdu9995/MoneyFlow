@@ -722,7 +722,7 @@ export class McpGateway {
         const topExpenses = this.service.db
           .prepare(
             `SELECT t.description, t.amount, t.transaction_date, t.type FROM transactions t
-             JOIN accounts a ON a.id = t.account_id
+             LEFT JOIN accounts a ON a.id = t.account_id
              WHERE t.space_id = ? AND t.deleted_at IS NULL AND t.type IN ('expense', 'card_purchase')
                AND t.transaction_date >= ? AND t.transaction_date <= ?
                AND COALESCE(a.is_piggy_bank, 0) = 0
