@@ -7,6 +7,7 @@ export function createRateLimiter(options = {}) {
   const windowMs = options.windowMs || 60 * 1000;
   const globalLimit = options.globalLimit || 1000;
   const userIpLimit = options.userIpLimit || 100;
+  const metrics = options.metrics || null;
 
   return function rateLimitMiddleware(req, res, next) {
     const now = Date.now();
@@ -25,6 +26,7 @@ export function createRateLimiter(options = {}) {
     // 1. Limite Global
     const globalTimestamps = store.get('global') || [];
     if (globalTimestamps.length >= globalLimit) {
+      metrics?.recordRateLimit({ scope: 'global' });
       logger.info('Global rate limit exceeded', { 
         ip: req.ip || req.connection?.remoteAddress,
         url: req.url ? req.url.split('?')[0] : req.url 
@@ -51,6 +53,7 @@ export function createRateLimiter(options = {}) {
     const userTimestamps = store.get(key) || [];
     
     if (userTimestamps.length >= userIpLimit) {
+      metrics?.recordRateLimit({ scope: 'user_ip' });
       logger.info('User/IP rate limit exceeded', { 
         identifier: userOrIp, 
         url: req.url ? req.url.split('?')[0] : req.url 

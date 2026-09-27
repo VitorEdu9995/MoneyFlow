@@ -99,8 +99,13 @@ export class SpaceIsolationService {
   /**
    * @param {import('node:sqlite').DatabaseSync} db
    */
-  constructor(db) {
+  constructor(db, { metrics = null } = {}) {
     this.db = db;
+    this.metrics = metrics;
+  }
+
+  setMetrics(metrics) {
+    this.metrics = metrics;
   }
 
   // =========================================================================
@@ -445,6 +450,8 @@ export class SpaceIsolationService {
         ipAddress,
         userAgent,
       );
+
+    this.metrics?.recordAuditEvent();
       
     logger.info(`Audit Log: ${action} on ${entityType}`, {
       auditId: id,
