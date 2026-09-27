@@ -72,6 +72,101 @@ export async function executeMcpHttpRequest(gateway, { method, path, body, authC
       return { status, body: successResponse(result) };
     }
 
+    // Rotas de Catálogo de Instituições e Logos
+    if (method === 'GET' && url.pathname === '/api/v1/catalog/institutions') {
+      if (!gateway.catalogService) {
+        throw new AppError(ErrorCodes.NOT_FOUND, 'Serviço de catálogo não disponível.', 404);
+      }
+      const query = url.searchParams.get('query') || '';
+      const limit = Number(url.searchParams.get('limit')) || 50;
+      const offset = Number(url.searchParams.get('offset')) || 0;
+      const result = gateway.catalogService.searchInstitutions({
+        query,
+        limit,
+        offset,
+        spaceId: authContext?.spaceId,
+      });
+      status = 200;
+      return { status, body: successResponse(result) };
+    }
+
+    const catalogInstMatch = url.pathname.match(/^\/api\/v1\/catalog\/institutions\/([^/]+)$/);
+    if (method === 'GET' && catalogInstMatch) {
+      if (!gateway.catalogService) {
+        throw new AppError(ErrorCodes.NOT_FOUND, 'Serviço de catálogo não disponível.', 404);
+      }
+      const institutionId = decodeURIComponent(catalogInstMatch[1]);
+      const result = gateway.catalogService.getInstitution(institutionId, {
+        spaceId: authContext?.spaceId,
+      });
+      status = 200;
+      return { status, body: successResponse(result) };
+    }
+
+    if (method === 'GET' && url.pathname === '/api/v1/catalog/brands') {
+      if (!gateway.catalogService) {
+        throw new AppError(ErrorCodes.NOT_FOUND, 'Serviço de catálogo não disponível.', 404);
+      }
+      const brands = gateway.catalogService.listCardBrands();
+      status = 200;
+      return { status, body: successResponse(brands) };
+    }
+
+    const catalogLogoMatch = url.pathname.match(/^\/api\/v1\/catalog\/logos\/([^/]+)$/);
+    if (method === 'GET' && catalogLogoMatch) {
+      if (!gateway.catalogService) {
+        throw new AppError(ErrorCodes.NOT_FOUND, 'Serviço de catálogo não disponível.', 404);
+      }
+      const assetId = decodeURIComponent(catalogLogoMatch[1]);
+      const logo = await gateway.catalogService.getLogoAssetContent(assetId);
+      status = 200;
+      return {
+        status,
+        headers: {
+          'Content-Type': logo.mimeType,
+          'X-Content-Type-Options': 'nosniff',
+          'Cache-Control': 'public, max-age=86400, immutable',
+          'ETag': `"${logo.sha256}"`,
+        },
+        body: successResponse({
+          asset_id: assetId,
+          content_base64: logo.buffer.toString('base64'),
+          mime_type: logo.mimeType,
+          format: logo.format,
+          sha256: logo.sha256,
+        }),
+      };
+    }
+
+    const catalogFavMatch = url.pathname.match(/^\/api\/v1\/catalog\/institutions\/([^/]+)\/favorite$/);
+    if (method === 'POST' && catalogFavMatch) {
+      if (!gateway.catalogService) {
+        throw new AppError(ErrorCodes.NOT_FOUND, 'Serviço de catálogo não disponível.', 404);
+      }
+      if (!authContext?.spaceId) {
+        throw new AppError(ErrorCodes.UNAUTHENTICATED, 'Contexto de espaço obrigatório para favoritar.', 401);
+      }
+      const institutionId = decodeURIComponent(catalogFavMatch[1]);
+      const favorite = body?.favorite !== false;
+      gateway.catalogService.toggleFavoriteInstitution(authContext.spaceId, institutionId, favorite);
+      status = 200;
+      return { status, body: successResponse({ success: true, institution_id: institutionId, favorite }) };
+    }
+
+    const catalogSelectMatch = url.pathname.match(/^\/api\/v1\/catalog\/institutions\/([^/]+)\/select$/);
+    if (method === 'POST' && catalogSelectMatch) {
+      if (!gateway.catalogService) {
+        throw new AppError(ErrorCodes.NOT_FOUND, 'Serviço de catálogo não disponível.', 404);
+      }
+      if (!authContext?.spaceId) {
+        throw new AppError(ErrorCodes.UNAUTHENTICATED, 'Contexto de espaço obrigatório para registrar seleção.', 401);
+      }
+      const institutionId = decodeURIComponent(catalogSelectMatch[1]);
+      gateway.catalogService.recordInstitutionSelection(authContext.spaceId, institutionId);
+      status = 200;
+      return { status, body: successResponse({ success: true, institution_id: institutionId }) };
+    }
+
     if (method !== 'POST' || path !== '/api/v1/mcp/execute') {
       throw new AppError(ErrorCodes.METHOD_NOT_ALLOWED, 'Endpoint MCP disponível apenas em POST /api/v1/mcp/execute.', 405);
     }

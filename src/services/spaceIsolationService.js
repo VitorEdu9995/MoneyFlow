@@ -485,15 +485,34 @@ export class SpaceIsolationService {
   /**
    * Cria conta bancária no espaço do contexto.
    */
-  createAccount(authContext, { id = randomUUID(), name, openingBalance = 0, accountType = 'checking', currency = 'BRL' }) {
+  createAccount(
+    authContext,
+    {
+      id = randomUUID(),
+      name,
+      openingBalance = 0,
+      accountType = 'checking',
+      currency = 'BRL',
+      institutionId = null,
+      customLogoAssetId = null,
+      useInstitutionLogo = 1,
+    },
+  ) {
     requireAuthorization(authContext, Permissions.ACCOUNTS_WRITE);
+
+    const instId = institutionId ?? null;
+    const logoAssetId = customLogoAssetId ?? null;
+    const useLogo = useInstitutionLogo !== undefined ? (useInstitutionLogo ? 1 : 0) : 1;
 
     this.db
       .prepare(
-        `INSERT INTO accounts (id, space_id, name, opening_balance, current_balance, account_type, currency)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO accounts (
+           id, space_id, name, opening_balance, current_balance, account_type, currency,
+           institution_id, custom_logo_asset_id, use_institution_logo
+         )
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(id, authContext.spaceId, name, openingBalance, openingBalance, accountType, currency);
+      .run(id, authContext.spaceId, name, openingBalance, openingBalance, accountType, currency, instId, logoAssetId, useLogo);
 
     this.logAudit({
       spaceId: authContext.spaceId,
@@ -501,7 +520,7 @@ export class SpaceIsolationService {
       action: 'account.create',
       entityType: 'accounts',
       entityId: id,
-      newData: { id, name, openingBalance, accountType, currency },
+      newData: { id, name, openingBalance, accountType, currency, institutionId: instId },
     });
 
     return this.getAccount(authContext, id);
@@ -534,7 +553,20 @@ export class SpaceIsolationService {
    */
   createCreditCard(
     authContext,
-    { id = randomUUID(), name, closingDay, dueDay, creditLimit = null, paymentAccountId = null, brand = null },
+    {
+      id = randomUUID(),
+      name,
+      closingDay,
+      dueDay,
+      creditLimit = null,
+      paymentAccountId = null,
+      brand = null,
+      institutionId = null,
+      cardBrandId = null,
+      customLogoAssetId = null,
+      useInstitutionLogo = 1,
+      primaryColor = null,
+    },
   ) {
     requireAuthorization(authContext, Permissions.CARDS_WRITE);
 
@@ -552,12 +584,35 @@ export class SpaceIsolationService {
       }
     }
 
+    const instId = institutionId ?? null;
+    const cBrandId = cardBrandId ?? null;
+    const logoAssetId = customLogoAssetId ?? null;
+    const useLogo = useInstitutionLogo !== undefined ? (useInstitutionLogo ? 1 : 0) : 1;
+    const color = primaryColor ?? null;
+
     this.db
       .prepare(
-        `INSERT INTO credit_cards (id, space_id, name, closing_day, due_day, credit_limit, payment_account_id, brand)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO credit_cards (
+           id, space_id, name, closing_day, due_day, credit_limit, payment_account_id, brand,
+           institution_id, card_brand_id, custom_logo_asset_id, use_institution_logo, primary_color
+         )
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(id, authContext.spaceId, name, closingDay, dueDay, creditLimit, paymentAccountId, brand);
+      .run(
+        id,
+        authContext.spaceId,
+        name,
+        closingDay,
+        dueDay,
+        creditLimit,
+        paymentAccountId,
+        brand,
+        instId,
+        cBrandId,
+        logoAssetId,
+        useLogo,
+        color,
+      );
 
     this.logAudit({
       spaceId: authContext.spaceId,
@@ -565,7 +620,7 @@ export class SpaceIsolationService {
       action: 'credit_card.create',
       entityType: 'credit_cards',
       entityId: id,
-      newData: { id, name, closingDay, dueDay, creditLimit, paymentAccountId },
+      newData: { id, name, closingDay, dueDay, creditLimit, paymentAccountId, institutionId: instId, cardBrandId: cBrandId },
     });
 
     return this.getCreditCard(authContext, id);

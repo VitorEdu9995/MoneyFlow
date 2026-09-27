@@ -19,6 +19,7 @@ import { logger, redact, setMetricsCollector } from '../utils/logger.js';
 import { AttachmentService } from '../services/attachmentService.js';
 import { LgpdService } from '../services/lgpdService.js';
 import { OperationalMetrics } from '../observability/operationalMetrics.js';
+import { InstitutionCatalogService } from '../services/institutionCatalogService.js';
 
 export const OPEN_FINANCE_DISABLED_TOOLS = new Set([
   'get_latest_imports',
@@ -45,8 +46,12 @@ export class McpGateway {
    * @param {object} options
    * @param {import('../services/spaceIsolationService.js').SpaceIsolationService} [options.service]
    * @param {ToolContractRegistry} [options.registry]
+   * @param {AttachmentService} [options.attachmentService]
+   * @param {LgpdService} [options.lgpdService]
+   * @param {InstitutionCatalogService} [options.catalogService]
+   * @param {OperationalMetrics} [options.metrics]
    */
-  constructor({ service, registry, attachmentService, lgpdService, metrics } = {}) {
+  constructor({ service, registry, attachmentService, lgpdService, catalogService, metrics } = {}) {
     this.service = service;
     this.registry = registry || new ToolContractRegistry();
     this.extensionRegistry = new ExtensionToolContractRegistry();
@@ -56,6 +61,7 @@ export class McpGateway {
     this.attachmentService = attachmentService || (service ? new AttachmentService(service.db, service, { metrics: this.metrics }) : null);
     this.attachmentService?.setMetrics?.(this.metrics);
     this.lgpdService = lgpdService || (service ? new LgpdService(service.db, service, this.attachmentService) : null);
+    this.catalogService = catalogService || (service?.db ? new InstitutionCatalogService(service.db) : null);
   }
 
   getOperationalStatus(authContext) {
@@ -602,6 +608,37 @@ export class McpGateway {
 
   _handleListInstitutions(args, authContext) {
     requireAuthorization(authContext, Permissions.FINANCE_READ);
+
+    if (this.catalogService) {
+      try {
+        const searchResult = this.catalogService.searchInstitutions({
+          query: args?.query || '',
+          spaceId: authContext?.spaceId,
+          limit: 100,
+        });
+        if (searchResult.institutions && searchResult.institutions.length > 0) {
+          return searchResult.institutions.map((i) => ({
+            id: i.id,
+            name: i.popularName,
+            slug: i.popularName
+              .toLowerCase()
+              .normalize('NFD')
+              .replace(/[\u0300-\u036f]/g, '')
+              .replace(/[^a-z0-9]+/g, '-')
+              .replace(/^-|-$/g, ''),
+            ispb: i.ispb,
+            bank_code: i.bankCode,
+            logo_url: i.logo?.localUrl || i.logo?.sourceUrl || null,
+            is_favorite: i.isFavorite,
+          }));
+        }
+      } catch (err) {
+        logger.warn('Falha ao consultar catalogService em _handleListInstitutions, usando fallback estático', {
+          error: err.message,
+        });
+      }
+    }
+
     const institutions = [
       { id: 'nubank', name: 'Nubank', slug: 'nubank' },
       { id: 'itau', name: 'Itaú', slug: 'itau' },
@@ -611,7 +648,7 @@ export class McpGateway {
       { id: 'bb', name: 'Banco do Brasil', slug: 'bb' },
       { id: 'caixa', name: 'Caixa Econômica', slug: 'caixa' },
     ];
-    if (args.query) {
+    if (args?.query) {
       const q = args.query.toLowerCase();
       return institutions.filter((i) => i.name.toLowerCase().includes(q) || i.slug.includes(q));
     }
@@ -1648,11 +1685,18 @@ export class McpGateway {
   _handleCreateAccount(args, authContext) {
     requireAuthorization(authContext, Permissions.ACCOUNTS_WRITE);
     const balanceInCents = args.opening_balance ? Math.round(args.opening_balance * 100) : 0;
-    return this.service.createAccount(authContext, {
+    const account = this.service.createAccount(authContext, {
       name: args.name,
       openingBalance: balanceInCents,
       accountType: args.account_type || 'checking',
+      institutionId: args.institution_id || null,
     });
+    if (args.institution_id && this.catalogService) {
+      try {
+        this.catalogService.recordInstitutionSelection(authContext.spaceId, args.institution_id);
+      } catch {}
+    }
+    return account;
   }
 
   _handleUpdateAccount(args, authContext) {
@@ -1664,6 +1708,15 @@ export class McpGateway {
     if (args.name !== undefined) {
       updates.push('name = ?');
       values.push(args.name);
+    }
+    if (args.institution_id !== undefined) {
+      updates.push('institution_id = ?');
+      values.push(args.institution_id || null);
+      if (args.institution_id && this.catalogService) {
+        try {
+          this.catalogService.recordInstitutionSelection(authContext.spaceId, args.institution_id);
+        } catch {}
+      }
     }
     if (args.archived !== undefined) {
       updates.push("archived_at = CASE WHEN ? THEN datetime('now') ELSE NULL END");
@@ -1687,13 +1740,21 @@ export class McpGateway {
   _handleCreateCreditCard(args, authContext) {
     requireAuthorization(authContext, Permissions.CARDS_WRITE);
     const limitInCents = args.credit_limit ? Math.round(args.credit_limit * 100) : null;
-    return this.service.createCreditCard(authContext, {
+    const card = this.service.createCreditCard(authContext, {
       name: args.name,
       closingDay: args.closing_day,
       dueDay: args.due_day,
       creditLimit: limitInCents,
       brand: args.brand || null,
+      institutionId: args.institution_id || null,
+      cardBrandId: args.card_brand_id || null,
     });
+    if (args.institution_id && this.catalogService) {
+      try {
+        this.catalogService.recordInstitutionSelection(authContext.spaceId, args.institution_id);
+      } catch {}
+    }
+    return card;
   }
 
   _handleUpdateCreditCard(args, authContext) {
@@ -1705,6 +1766,23 @@ export class McpGateway {
     if (args.name !== undefined) {
       updates.push('name = ?');
       values.push(args.name);
+    }
+    if (args.institution_id !== undefined) {
+      updates.push('institution_id = ?');
+      values.push(args.institution_id || null);
+      if (args.institution_id && this.catalogService) {
+        try {
+          this.catalogService.recordInstitutionSelection(authContext.spaceId, args.institution_id);
+        } catch {}
+      }
+    }
+    if (args.card_brand_id !== undefined) {
+      updates.push('card_brand_id = ?');
+      values.push(args.card_brand_id || null);
+    }
+    if (args.brand !== undefined) {
+      updates.push('brand = ?');
+      values.push(args.brand || null);
     }
     if (args.closing_day !== undefined) {
       updates.push('closing_day = ?');
