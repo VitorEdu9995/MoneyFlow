@@ -37,9 +37,13 @@ function setup() {
 }
 
 async function upload(attachmentService, context) {
+  const entityId = crypto.randomUUID();
+  attachmentService.db.prepare(
+    "INSERT INTO transactions (id, space_id, type, description, amount, transaction_date) VALUES (?, ?, 'expense', 'Anexo', 1, '2026-09-27')",
+  ).run(entityId, context.spaceId);
   return attachmentService.uploadAttachment(context, pdf, {
     entityType: 'transaction',
-    entityId: crypto.randomUUID(),
+    entityId,
     fileName: 'nota.pdf',
     declaredMimeType: 'application/pdf',
   });
