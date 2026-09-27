@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
-import { Home, CreditCard, List, Tags, PieChart, BarChart2, Briefcase, Target } from 'lucide-react';
+import { Home, CreditCard, List, Tags, PieChart, BarChart2, Briefcase, Target, ExternalLink } from 'lucide-react';
 import logo from '../assets/logo.png';
 import { getActiveSpaceId, setActiveSpaceId } from '../api';
 
@@ -78,6 +78,23 @@ export default function Layout() {
             })}
           </ul>
         </nav>
+
+        {/* Link para Apresentação do Sistema / Landing Page */}
+        <div className="px-3 py-2 border-t border-white/10">
+          <Link
+            to="/landing"
+            className="flex items-center justify-between text-xs text-mentaClara/80 hover:text-mentaClara hover:bg-white/10 px-3 py-2 rounded-lg transition-all"
+            title="Conheça a visão geral e todas as funcionalidades do MoneyFlow"
+          >
+            <span className="flex items-center">
+              <ExternalLink className="w-3.5 h-3.5 mr-2 text-mentaClara" />
+              Conheça o MoneyFlow
+            </span>
+            <span className="text-[10px] bg-mentaClara/20 text-mentaClara px-1.5 py-0.5 rounded font-mono font-medium">
+              Apresentação
+            </span>
+          </Link>
+        </div>
 
         {/* Perfil do Usuário */}
         <div className="p-4 border-t border-white/10 bg-black/10">
