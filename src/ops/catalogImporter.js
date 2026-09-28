@@ -44,12 +44,24 @@ export class CatalogImporter {
   }
 
   async loadCatalogItems() {
-    try {
-      const data = await fs.readFile(this.jsonPath, 'utf8');
-      return JSON.parse(data);
-    } catch {
-      throw new Error(`Arquivo de catálogo JSON não encontrado em ${this.jsonPath}.`);
+    const candidatePaths = [
+      this.jsonPath,
+      path.join(process.cwd(), 'Documentação', 'Bancos e Logos', 'instituicoes_catalogo.json'),
+      path.join(process.cwd(), 'Documentacao', 'Bancos e Logos', 'instituicoes_catalogo.json'),
+      path.join(process.cwd(), 'docs', 'instituicoes_catalogo.json'),
+    ];
+
+    for (const candidate of candidatePaths) {
+      if (!candidate) continue;
+      try {
+        const data = await fs.readFile(candidate, 'utf8');
+        return JSON.parse(data);
+      } catch {
+        // Tenta próximo candidato
+      }
     }
+
+    throw new Error(`Arquivo de catálogo JSON não encontrado em ${this.jsonPath}.`);
   }
 
   async computeXlsxSha256() {

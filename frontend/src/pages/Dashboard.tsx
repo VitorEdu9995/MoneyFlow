@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { apiExecute } from '../api';
-import { ArrowUpRight, ArrowDownRight, Wallet, TrendingUp, Building2, Clock, Sparkles } from 'lucide-react';
+import { ArrowUpRight, ArrowDownRight, Wallet, Building2, Clock, Sparkles } from 'lucide-react';
 import { formatCurrency, formatDate } from '../utils/formatters';
 
 export default function Dashboard() {
