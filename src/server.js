@@ -2,11 +2,24 @@ import http from 'node:http';
 import path from 'node:path';
 import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
+
+// Carrega variáveis do arquivo .env automaticamente se existir
+if (fs.existsSync(path.join(process.cwd(), '.env'))) {
+  try {
+    process.loadEnvFile(path.join(process.cwd(), '.env'));
+  } catch {
+    // Continua sem falhar
+  }
+}
+
 import { createDatabase, runMigrations } from './db/index.js';
 import { SpaceIsolationService } from './services/spaceIsolationService.js';
 import { InstitutionCatalogService } from './services/institutionCatalogService.js';
 import { AttachmentService } from './services/attachmentService.js';
 import { LgpdService } from './services/lgpdService.js';
+import { SettingsService } from './services/settingsService.js';
+import { EvolutionApiService } from './services/evolutionApiService.js';
+import { GeminiAudioService } from './services/geminiAudioService.js';
 import { CatalogImporter } from './ops/catalogImporter.js';
 import { McpGateway } from './gateway/mcpGateway.js';
 import { executeMcpHttpRequest } from './gateway/mcpHttpTransport.js';
@@ -32,6 +45,9 @@ const MIME_TYPES = {
   '.svg': 'image/svg+xml; charset=utf-8',
   '.ico': 'image/x-icon',
   '.webp': 'image/webp',
+  '.wav': 'audio/wav',
+  '.mp3': 'audio/mpeg',
+  '.ogg': 'audio/ogg',
 };
 
 if (!fs.existsSync(DATA_DIR)) {
@@ -48,12 +64,15 @@ if (appliedMigrations.length > 0) {
   logger.info('Migrações aplicadas com sucesso:', { count: appliedMigrations.length, migrations: appliedMigrations });
 }
 
-// 2. Inicializa Serviços de Domínio
+// 2. Inicializa Serviços de Domínio e Integrações
 const metrics = new OperationalMetrics();
 const service = new SpaceIsolationService(db, { metrics });
 const attachmentService = new AttachmentService(db, service, { metrics });
 const lgpdService = new LgpdService(db, service, attachmentService);
 const catalogService = new InstitutionCatalogService(db);
+const settingsService = new SettingsService(db);
+const evolutionService = new EvolutionApiService(db, settingsService);
+const geminiAudioService = new GeminiAudioService(db, settingsService);
 
 // 3. Importa Catálogo de Logos se estiver vazio
 const existingInstitutions = db.prepare('SELECT COUNT(*) as count FROM institutions').get();
@@ -102,6 +121,9 @@ const gateway = new McpGateway({
   attachmentService,
   lgpdService,
   metrics,
+  settingsService,
+  evolutionService,
+  geminiAudioService,
 });
 
 // 7. Popula Dados Demonstrativos no Espaço Pessoal se estiver vazio
@@ -438,6 +460,27 @@ const server = http.createServer((req, res) => {
           res.setHeader('Content-Disposition', `attachment; filename="${result.body.data.file_name}"`);
           res.end(attBuffer);
           return;
+        }
+
+        // Suporte a streaming/download de áudio gerado pelo Gemini TTS
+        const audioDownloadMatch = url.pathname.match(/^\/api\/v1\/media\/audio\/([^/]+)$/);
+        if (req.method === 'GET' && audioDownloadMatch) {
+          try {
+            const audioId = decodeURIComponent(audioDownloadMatch[1]);
+            const audioData = await geminiAudioService.getAudioFile(audioId);
+            res.statusCode = 200;
+            res.setHeader('Content-Type', audioData.mimeType || 'audio/wav');
+            res.setHeader('Content-Length', audioData.buffer.length);
+            res.setHeader('Accept-Ranges', 'bytes');
+            res.setHeader('Cache-Control', 'public, max-age=86400');
+            res.end(audioData.buffer);
+            return;
+          } catch (err) {
+            res.statusCode = 404;
+            res.setHeader('Content-Type', 'application/json; charset=utf-8');
+            res.end(JSON.stringify({ ok: false, error: { code: 'NOT_FOUND', message: 'Áudio não encontrado.' } }));
+            return;
+          }
         }
 
         res.statusCode = result.status;

@@ -18,6 +18,7 @@ test('Migrations estruturais sobem em banco vazio com integridade e sem dados au
     '008_protect_piggy_bank_internal_transactions',
     '009_attachment_lifecycle',
     '010_institution_logo_catalog',
+    '011_system_settings_and_integrations',
   ]);
 
   // Nenhuma tabela possui dados inseridos automaticamente
@@ -34,6 +35,7 @@ test('Migrations estruturais sobem em banco vazio com integridade e sem dados au
   const piggyBanks = db.prepare('SELECT COUNT(*) as count FROM piggy_banks').get().count;
   const institutions = db.prepare('SELECT COUNT(*) as count FROM institutions').get().count;
   const cardBrands = db.prepare('SELECT COUNT(*) as count FROM card_brands').get().count;
+  const systemSettings = db.prepare('SELECT COUNT(*) as count FROM system_settings').get().count;
 
   assert.equal(users, 0);
   assert.equal(spaces, 0);
@@ -48,6 +50,7 @@ test('Migrations estruturais sobem em banco vazio com integridade e sem dados au
   assert.equal(piggyBanks, 0);
   assert.equal(institutions, 0);
   assert.equal(cardBrands, 0);
+  assert.equal(systemSettings, 0);
 
   // Executar novamente não reaplica (idempotente)
   const reapplied = runMigrations(db);
@@ -58,7 +61,8 @@ test('Migrations são reversíveis via rollback explícito', () => {
   const db = createDatabase(':memory:');
   runMigrations(db);
 
-  // Reversão explícita na ordem de dependência (010 a 001).
+  // Reversão explícita na ordem de dependência (011 a 001).
+  rollbackMigration(db, '011_system_settings_and_integrations');
   rollbackMigration(db, '010_institution_logo_catalog');
   rollbackMigration(db, '009_attachment_lifecycle');
   rollbackMigration(db, '008_protect_piggy_bank_internal_transactions');

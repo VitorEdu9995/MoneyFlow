@@ -20,6 +20,10 @@ import { AttachmentService } from '../services/attachmentService.js';
 import { LgpdService } from '../services/lgpdService.js';
 import { OperationalMetrics } from '../observability/operationalMetrics.js';
 import { InstitutionCatalogService } from '../services/institutionCatalogService.js';
+import { IntegrationToolContractRegistry } from '../contracts/integrationToolRegistry.js';
+import { SettingsService } from '../services/settingsService.js';
+import { EvolutionApiService } from '../services/evolutionApiService.js';
+import { GeminiAudioService } from '../services/geminiAudioService.js';
 
 export const OPEN_FINANCE_DISABLED_TOOLS = new Set([
   'get_latest_imports',
@@ -51,10 +55,11 @@ export class McpGateway {
    * @param {InstitutionCatalogService} [options.catalogService]
    * @param {OperationalMetrics} [options.metrics]
    */
-  constructor({ service, registry, attachmentService, lgpdService, catalogService, metrics } = {}) {
+  constructor({ service, registry, attachmentService, lgpdService, catalogService, metrics, settingsService, evolutionService, geminiAudioService } = {}) {
     this.service = service;
     this.registry = registry || new ToolContractRegistry();
     this.extensionRegistry = new ExtensionToolContractRegistry();
+    this.integrationRegistry = new IntegrationToolContractRegistry();
     this.metrics = metrics || new OperationalMetrics();
     setMetricsCollector(this.metrics);
     this.service?.setMetrics?.(this.metrics);
@@ -62,6 +67,9 @@ export class McpGateway {
     this.attachmentService?.setMetrics?.(this.metrics);
     this.lgpdService = lgpdService || (service ? new LgpdService(service.db, service, this.attachmentService) : null);
     this.catalogService = catalogService || (service?.db ? new InstitutionCatalogService(service.db) : null);
+    this.settingsService = settingsService || (service?.db ? new SettingsService(service.db) : null);
+    this.evolutionService = evolutionService || (service?.db && this.settingsService ? new EvolutionApiService(service.db, this.settingsService) : null);
+    this.geminiAudioService = geminiAudioService || (service?.db && this.settingsService ? new GeminiAudioService(service.db, this.settingsService) : null);
   }
 
   getOperationalStatus(authContext) {
@@ -81,11 +89,15 @@ export class McpGateway {
   }
 
   /**
-   * Retorna os nomes de todas as ferramentas disponíveis no Gateway MCP (62 ferramentas).
+   * Retorna os nomes de todas as ferramentas disponíveis no Gateway MCP (62 originais + 25 extensões + integrações).
    * @returns {string[]}
    */
   getToolNames() {
-    return [...this.registry.getToolNames(), ...this.extensionRegistry.getToolNames()].sort();
+    return [
+      ...this.registry.getToolNames(),
+      ...this.extensionRegistry.getToolNames(),
+      ...this.integrationRegistry.getToolNames(),
+    ].sort();
   }
 
   /**
@@ -96,34 +108,45 @@ export class McpGateway {
     try {
       return this.registry.getTool(toolName);
     } catch {
-      return this.extensionRegistry.getTool(toolName);
+      try {
+        return this.extensionRegistry.getTool(toolName);
+      } catch {
+        return this.integrationRegistry.getTool(toolName);
+      }
     }
   }
 
   async executeTool(toolName, args = {}, authContext = {}) {
     logger.info(`Executing tool ${toolName}`, { args, spaceId: authContext?.spaceId });
     try {
-      // 1. Validação de existência da ferramenta — primeiro no catálogo congelado, depois nas extensões
+      // 1. Validação de existência da ferramenta — catálogo congelado, extensões e integrações
       let toolDefinition;
+      let activeRegistry = this.registry;
       let isExtension = false;
+      let isIntegration = false;
       try {
         toolDefinition = this.registry.getTool(toolName);
       } catch {
-        // Tenta no registry de extensões (Fase 4 e futuras)
         try {
           toolDefinition = this.extensionRegistry.getTool(toolName);
+          activeRegistry = this.extensionRegistry;
           isExtension = true;
         } catch {
-          throw new AppError(
-            ErrorCodes.NOT_FOUND,
-            `Ferramenta desconhecida: '${toolName}' não existe no catálogo de ferramentas.`,
-            404,
-          );
+          try {
+            toolDefinition = this.integrationRegistry.getTool(toolName);
+            activeRegistry = this.integrationRegistry;
+            isIntegration = true;
+          } catch {
+            throw new AppError(
+              ErrorCodes.NOT_FOUND,
+              `Ferramenta desconhecida: '${toolName}' não existe no catálogo de ferramentas.`,
+              404,
+            );
+          }
         }
       }
 
-      // 2. Validação estrita de argumentos contra o schema congelado (ou de extensão)
-      const activeRegistry = isExtension ? this.extensionRegistry : this.registry;
+      // 2. Validação estrita de argumentos
       const validation = activeRegistry.validateArgs(toolName, args);
       if (!validation.valid) {
         throw new AppError(
@@ -146,15 +169,15 @@ export class McpGateway {
       }
 
       // 4. Se a chamada for identificada como mock fixture e não houver service ou spaceId
-      //    (apenas para ferramentas do catálogo congelado, não extensões)
       let fixture = null;
-      if (!isExtension) {
+      if (!isExtension && !isIntegration) {
         try {
           fixture = this.registry.getFixture(toolName);
-        } catch { /* extensão sem fixture — prossegue normalmente */ }
+        } catch { /* extensão ou integração sem fixture — prossegue normalmente */ }
       }
       const isExactFixtureCall =
         !isExtension &&
+        !isIntegration &&
         (!authContext || !authContext.spaceId) &&
         fixture &&
         JSON.stringify(args) === JSON.stringify(fixture.validCall.arguments);
@@ -383,6 +406,14 @@ export class McpGateway {
       get_goal_progress: this._handleGetGoalProgress,
       cofrinho_deposit: this._handleCofrinhoDeposit,
       cofrinho_withdraw: this._handleCofrinhoWithdraw,
+
+      // 8. Integrações com Agentes de IA (WhatsApp / Evolution API e Gemini TTS)
+      whatsapp_send_message: this._handleWhatsappSendMessage,
+      gemini_generate_audio: this._handleGeminiGenerateAudio,
+      get_integration_settings: this._handleGetIntegrationSettings,
+      update_integration_settings: this._handleUpdateIntegrationSettings,
+      test_whatsapp_connection: this._handleTestWhatsappConnection,
+      test_gemini_connection: this._handleTestGeminiConnection,
     };
 
     return handlers[toolName];
@@ -1983,5 +2014,107 @@ export class McpGateway {
     }
 
     return { sourceMonth: sourceMonthStr, targetMonth: targetMonthStr, clonedCount };
+  }
+
+  // ============================================================================
+  // Handlers de Integração (WhatsApp / Evolution API, Gemini Audio / TTS, Settings)
+  // ============================================================================
+
+  async _handleWhatsappSendMessage(args, authContext) {
+    if (!this.evolutionService) {
+      throw new AppError(ErrorCodes.INTERNAL_ERROR, 'Serviço de WhatsApp não configurado no servidor.', 500);
+    }
+    const messageType = args.message_type || 'text';
+    if (messageType === 'text') {
+      return await this.evolutionService.sendTextMessage({
+        recipient: args.recipient,
+        text: args.text,
+        instanceName: args.instance_name,
+        spaceId: authContext?.spaceId,
+        mock: Boolean(args.mock),
+      });
+    } else if (messageType === 'audio') {
+      return await this.evolutionService.sendAudioMessage({
+        recipient: args.recipient,
+        audioBase64: args.audio_base64,
+        audioUrl: args.audio_url,
+        instanceName: args.instance_name,
+        spaceId: authContext?.spaceId,
+        mock: Boolean(args.mock),
+      });
+    } else if (messageType === 'media') {
+      return await this.evolutionService.sendMediaMessage({
+        recipient: args.recipient,
+        mediaBase64: args.media_base64,
+        mediaUrl: args.media_url,
+        mediaType: args.media_type || 'image',
+        caption: args.caption || args.text,
+        instanceName: args.instance_name,
+        spaceId: authContext?.spaceId,
+        mock: Boolean(args.mock),
+      });
+    } else {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, `Tipo de mensagem não suportado: ${messageType}`, 400);
+    }
+  }
+
+  async _handleGeminiGenerateAudio(args, authContext) {
+    if (!this.geminiAudioService) {
+      throw new AppError(ErrorCodes.INTERNAL_ERROR, 'Serviço de Áudio Gemini não configurado no servidor.', 500);
+    }
+    return await this.geminiAudioService.generateAudio({
+      text: args.text,
+      voiceName: args.voice_name,
+      model: args.model,
+      promptInstruction: args.prompt_instruction,
+      spaceId: authContext?.spaceId,
+      mock: Boolean(args.mock),
+    });
+  }
+
+  async _handleGetIntegrationSettings(args, authContext) {
+    if (!this.settingsService) {
+      throw new AppError(ErrorCodes.INTERNAL_ERROR, 'Serviço de configurações não disponível.', 500);
+    }
+    return this.settingsService.getAllIntegrationSettings();
+  }
+
+  async _handleUpdateIntegrationSettings(args, authContext) {
+    if (!this.settingsService) {
+      throw new AppError(ErrorCodes.INTERNAL_ERROR, 'Serviço de configurações não disponível.', 500);
+    }
+    if (args.gemini_api_key !== undefined) {
+      this.settingsService.setSetting('gemini_api_key', args.gemini_api_key, { isSecret: true, description: 'Chave de API do Google Gemini' });
+    }
+    if (args.gemini_default_voice !== undefined) {
+      this.settingsService.setSetting('gemini_default_voice', args.gemini_default_voice, { isSecret: false, description: 'Voz padrão do Gemini TTS' });
+    }
+    if (args.gemini_default_model !== undefined) {
+      this.settingsService.setSetting('gemini_default_model', args.gemini_default_model, { isSecret: false, description: 'Modelo padrão do Gemini' });
+    }
+    if (args.evolution_api_url !== undefined) {
+      this.settingsService.setSetting('evolution_api_url', args.evolution_api_url, { isSecret: false, description: 'URL base da Evolution API' });
+    }
+    if (args.evolution_api_key !== undefined) {
+      this.settingsService.setSetting('evolution_api_key', args.evolution_api_key, { isSecret: true, description: 'Chave da Evolution API' });
+    }
+    if (args.evolution_instance_name !== undefined) {
+      this.settingsService.setSetting('evolution_instance_name', args.evolution_instance_name, { isSecret: false, description: 'Nome da Instância do WhatsApp' });
+    }
+    return this.settingsService.getAllIntegrationSettings();
+  }
+
+  async _handleTestWhatsappConnection(args, authContext) {
+    if (!this.evolutionService) {
+      throw new AppError(ErrorCodes.INTERNAL_ERROR, 'Serviço de WhatsApp não configurado no servidor.', 500);
+    }
+    return await this.evolutionService.testConnection({ instanceName: args.instance_name });
+  }
+
+  async _handleTestGeminiConnection(args, authContext) {
+    if (!this.geminiAudioService) {
+      throw new AppError(ErrorCodes.INTERNAL_ERROR, 'Serviço de Áudio Gemini não configurado no servidor.', 500);
+    }
+    return await this.geminiAudioService.testKey(args.api_key);
   }
 }
