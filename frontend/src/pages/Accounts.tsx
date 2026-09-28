@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { apiExecute } from '../api';
-import InstitutionLogoPicker, { InstitutionItem } from '../components/InstitutionLogoPicker';
-import { Plus, Building2, Wallet } from 'lucide-react';
+import InstitutionLogoPicker, { type InstitutionItem } from '../components/InstitutionLogoPicker';
+import { Plus, Building2 } from 'lucide-react';
 import { formatCurrency } from '../utils/formatters';
 
 export default function Accounts() {

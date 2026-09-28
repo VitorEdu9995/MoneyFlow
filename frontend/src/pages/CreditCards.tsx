@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { apiExecute } from '../api';
-import InstitutionLogoPicker, { InstitutionItem } from '../components/InstitutionLogoPicker';
+import InstitutionLogoPicker, { type InstitutionItem } from '../components/InstitutionLogoPicker';
 import BrandPicker from '../components/BrandPicker';
 import { Plus, CreditCard as CardIcon, Calendar } from 'lucide-react';
 import { formatCurrency } from '../utils/formatters';

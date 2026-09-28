@@ -6,23 +6,15 @@ import {
   Layers,
   PieChart,
   Target,
-  CreditCard,
   Wallet,
   ChevronDown,
   Sparkles,
   TrendingUp,
   BarChart3,
   Lock,
-  RefreshCw,
-  HelpCircle,
-  Briefcase,
   Calendar,
   Check,
-  ArrowUpRight,
   Building2,
-  FileCheck,
-  Eye,
-  Sliders,
   DollarSign
 } from 'lucide-react';
 import logo from '../assets/logo.png';

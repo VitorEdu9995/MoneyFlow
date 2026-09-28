@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from 'react';
+import { type FormEvent, useEffect, useState } from 'react';
 import { apiExecute } from '../api';
 import { Plus, Target, PiggyBank, ArrowDownToLine, Pencil, Trash2 } from 'lucide-react';
 import { formatCurrency } from '../utils/formatters';

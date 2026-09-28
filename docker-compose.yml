@@ -1,0 +1,27 @@
+services:
+  moneyflow:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: moneyflow:latest
+    container_name: moneyflow-app
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - DB_PATH=/app/.data/moneyflow.db
+    volumes:
+      - moneyflow_data:/app/.data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/api/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  moneyflow_data:
+    name: moneyflow_data
+    driver: local
