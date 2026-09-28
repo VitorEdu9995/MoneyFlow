@@ -9,6 +9,7 @@ import Budgets from './pages/Budgets';
 import Goals from './pages/Goals';
 import Reports from './pages/Reports';
 import LandingPage from './pages/LandingPage';
+import Settings from './pages/Settings';
 
 export default function App() {
   return (
@@ -25,6 +26,7 @@ export default function App() {
           <Route path="budgets" element={<Budgets />} />
           <Route path="goals" element={<Goals />} />
           <Route path="reports" element={<Reports />} />
+          <Route path="settings" element={<Settings />} />
         </Route>
       </Routes>
     </BrowserRouter>

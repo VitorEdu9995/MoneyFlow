@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
-import { Home, CreditCard, List, Tags, PieChart, BarChart2, Briefcase, Target, ExternalLink } from 'lucide-react';
+import { Home, CreditCard, List, Tags, PieChart, BarChart2, Briefcase, Target, ExternalLink, Settings as SettingsIcon } from 'lucide-react';
 import logo from '../assets/logo.png';
 import { getActiveSpaceId, setActiveSpaceId } from '../api';
 
@@ -17,6 +17,7 @@ export default function Layout() {
     { name: 'Orçamentos', path: '/budgets', icon: PieChart },
     { name: 'Metas', path: '/goals', icon: Target },
     { name: 'Fluxo de Caixa', path: '/reports', icon: BarChart2 },
+    { name: 'Configurações', path: '/settings', icon: SettingsIcon },
   ];
 
   const handleSpaceChange = (newSpace: string) => {

@@ -1,0 +1,160 @@
+{
+  "whatsapp_send_message": {
+    "name": "whatsapp_send_message",
+    "description": "Envia mensagens via WhatsApp (Evolution API) em formato texto, áudio de voz (PTT) ou mídia (imagem/documento). Atua como middleware do MoneyFlow para agentes de IA executarem rotinas de notificação financeira.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "recipient": {
+          "type": "string",
+          "description": "Número do destinatário com DDI e DDD (ex: 5511999999999 ou +55 (11) 99999-9999). Será sanitizado automaticamente."
+        },
+        "message_type": {
+          "type": "string",
+          "enum": ["text", "audio", "media"],
+          "default": "text",
+          "description": "Tipo da mensagem a ser enviada."
+        },
+        "text": {
+          "type": "string",
+          "description": "Texto da mensagem ou legenda para mídia."
+        },
+        "audio_base64": {
+          "type": "string",
+          "description": "Conteúdo de áudio codificado em Base64 (gerado pelo gemini_generate_audio)."
+        },
+        "audio_url": {
+          "type": "string",
+          "description": "URL pública ou local do arquivo de áudio."
+        },
+        "media_base64": {
+          "type": "string",
+          "description": "Mídia em Base64 (imagem, gráfico financeiro ou comprovante)."
+        },
+        "media_url": {
+          "type": "string",
+          "description": "URL da mídia a ser enviada."
+        },
+        "media_type": {
+          "type": "string",
+          "enum": ["image", "document", "video"],
+          "default": "image",
+          "description": "Tipo da mídia para envio."
+        },
+        "caption": {
+          "type": "string",
+          "description": "Legenda descritiva da imagem ou documento."
+        },
+        "instance_name": {
+          "type": "string",
+          "description": "Nome da instância na Evolution API (opcional, utiliza o padrão configurado se omitido)."
+        },
+        "mock": {
+          "type": "boolean",
+          "description": "Se verdadeiro, simula o envio com sucesso sem chamar a Evolution API real (útil em testes)."
+        }
+      },
+      "required": ["recipient"]
+    }
+  },
+  "gemini_generate_audio": {
+    "name": "gemini_generate_audio",
+    "description": "Gera áudio falado com voz natural ultra-realista via Google Gemini TTS para resumos, relatórios semanais e alertas financeiros. Retorna áudio em Base64 e URL local pronta para envio no WhatsApp.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "Texto em português a ser narrado pelo assistente."
+        },
+        "voice_name": {
+          "type": "string",
+          "enum": ["Charon", "Aoede", "Puck", "Fenrir", "Kore"],
+          "default": "Charon",
+          "description": "Nome da voz pré-configurada do Gemini (padrão: Charon [masculina confiável])."
+        },
+        "model": {
+          "type": "string",
+          "default": "gemini-2.5-flash",
+          "description": "Modelo Gemini utilizado para síntese de áudio."
+        },
+        "prompt_instruction": {
+          "type": "string",
+          "description": "Instruções de tom, ritmo ou persona da narração (opcional)."
+        },
+        "mock": {
+          "type": "boolean",
+          "description": "Se verdadeiro, gera áudio sintético localmente sem chamar a API do Gemini (para testes)."
+        }
+      },
+      "required": ["text"]
+    }
+  },
+  "get_integration_settings": {
+    "name": "get_integration_settings",
+    "description": "Retorna o status operacional das integrações de mensageria (WhatsApp / Evolution API) e áudio (Google Gemini), com chaves devidamente mascaradas.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  "update_integration_settings": {
+    "name": "update_integration_settings",
+    "description": "Atualiza as credenciais e configurações de integração do sistema (chaves de API criptografadas com AES-256-GCM no banco SQLite).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "gemini_api_key": {
+          "type": "string",
+          "description": "Chave da API do Google AI Studio / Gemini."
+        },
+        "gemini_default_voice": {
+          "type": "string",
+          "description": "Voz padrão do Gemini TTS (ex: Charon, Aoede)."
+        },
+        "gemini_default_model": {
+          "type": "string",
+          "description": "Modelo padrão do Gemini (ex: gemini-2.5-flash)."
+        },
+        "evolution_api_url": {
+          "type": "string",
+          "description": "URL base da Evolution API (ex: https://evolution.seu-dominio.com.br)."
+        },
+        "evolution_api_key": {
+          "type": "string",
+          "description": "Chave de autenticação (apikey) da Evolution API."
+        },
+        "evolution_instance_name": {
+          "type": "string",
+          "description": "Nome da instância ativa do WhatsApp no Evolution API."
+        }
+      }
+    }
+  },
+  "test_whatsapp_connection": {
+    "name": "test_whatsapp_connection",
+    "description": "Testa a conectividade com a Evolution API e verifica se a instância do WhatsApp está conectada e operacional.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "instance_name": {
+          "type": "string",
+          "description": "Nome da instância para teste (opcional)."
+        }
+      }
+    }
+  },
+  "test_gemini_connection": {
+    "name": "test_gemini_connection",
+    "description": "Testa a conectividade e validade da chave de API do Google Gemini configurada no MoneyFlow.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "api_key": {
+          "type": "string",
+          "description": "Chave opcional para testar antes de salvar no sistema."
+        }
+      }
+    }
+  }
+}
