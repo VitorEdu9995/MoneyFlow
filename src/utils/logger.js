@@ -24,6 +24,8 @@ function recordRedaction() {
 }
 
 const SK_REGEX = /sk-[a-zA-Z0-9_-]+/g;
+const AIZA_REGEX = /AIza[0-9A-Za-z_-]{35}/g;
+const APIKEY_QUERY_REGEX = /([?&]key=)[^&\s"']+/gi;
 const TOKEN_REGEX = /Bearer\s+[a-zA-Z0-9\-\._~]+/gi;
 const CREDIT_CARD_REGEX = /\b(?:\d[ -]*?){13,16}\b/g;
 
@@ -32,6 +34,8 @@ export function redact(obj) {
 
   if (typeof obj === 'string') {
     let redactedStr = obj.replace(SK_REGEX, '[REDACTED]');
+    redactedStr = redactedStr.replace(AIZA_REGEX, '[REDACTED]');
+    redactedStr = redactedStr.replace(APIKEY_QUERY_REGEX, '$1[REDACTED]');
     redactedStr = redactedStr.replace(TOKEN_REGEX, 'Bearer [REDACTED]');
     redactedStr = redactedStr.replace(CREDIT_CARD_REGEX, '[REDACTED]');
     if (redactedStr !== obj) recordRedaction();
@@ -53,7 +57,9 @@ export function redact(obj) {
         lowerKey.includes('secret') ||
         lowerKey.includes('cvv') ||
         lowerKey.includes('card_number') ||
-        lowerKey.includes('api_key')
+        lowerKey.includes('api_key') ||
+        lowerKey.includes('apikey') ||
+        lowerKey.includes('base64')
       ) {
         redactedObj[key] = '[REDACTED]';
         recordRedaction();

@@ -95,12 +95,9 @@ test('EvolutionApiService: sanitiza telefone e despacha mensagens com auditoria'
   assert.equal(textRes.recipient, '5511988887777');
   assert.equal(textRes.status, 'sent');
 
-  // 3. Auditoria registrada na tabela message_dispatches
+  // 3. Validação de Zero-Storage: mensagens NÃO são persistidas no servidor
   const dispatchRow = db.prepare("SELECT * FROM message_dispatches WHERE recipient = '5511988887777'").get();
-  assert.ok(dispatchRow);
-  assert.equal(dispatchRow.channel, 'whatsapp');
-  assert.equal(dispatchRow.message_type, 'text');
-  assert.ok(dispatchRow.payload_summary.includes('resumo financeiro'));
+  assert.equal(dispatchRow, undefined);
 
   // 4. Envio de áudio (modo mock)
   const audioRes = await evolutionService.sendAudioMessage({
@@ -123,7 +120,7 @@ test('EvolutionApiService: sanitiza telefone e despacha mensagens com auditoria'
   assert.equal(mediaRes.success, true);
 });
 
-test('GeminiAudioService: sintetiza áudio TTS e persiste arquivo WAV', async () => {
+test('GeminiAudioService: sintetiza áudio TTS efêmero em memória sem reter no servidor (Zero-Storage)', async () => {
   const { geminiAudioService, db } = setupTestEnvironment();
 
   // Gera áudio falado com voz Charon
@@ -141,13 +138,11 @@ test('GeminiAudioService: sintetiza áudio TTS e persiste arquivo WAV', async ()
   assert.ok(audioRes.audio_base64.length > 0);
   assert.ok(audioRes.local_url.startsWith('/api/v1/media/audio/'));
 
-  // Verifica persistência na tabela audio_generations
+  // Confirma Zero-Storage: nenhuma linha gravada na tabela audio_generations
   const audioRow = db.prepare('SELECT * FROM audio_generations WHERE id = ?').get(audioRes.audio_id);
-  assert.ok(audioRow);
-  assert.equal(audioRow.voice_name, 'Charon');
-  assert.equal(audioRow.mime_type, 'audio/wav');
+  assert.equal(audioRow, undefined);
 
-  // Recupera o arquivo para streaming
+  // Recupera o áudio efêmero da memória para streaming imediato
   const file = await geminiAudioService.getAudioFile(audioRes.audio_id);
   assert.equal(file.mimeType, 'audio/wav');
   assert.ok(file.buffer.length > 0);

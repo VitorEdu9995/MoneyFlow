@@ -248,13 +248,18 @@ const rateLimiter = createRateLimiter({ userIpLimit: 200, windowMs: 60000 });
 // 8. Cria o Servidor HTTP
 const server = http.createServer((req, res) => {
   // Cabeçalhos Globais de Segurança e CORS
-  res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
+  if (req.headers.origin) {
+    res.setHeader('Access-Control-Allow-Origin', req.headers.origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+  } else {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Space-Id, Cache-Control, Accept');
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
 
   if (req.method === 'OPTIONS') {
     res.statusCode = 204;
@@ -462,8 +467,8 @@ const server = http.createServer((req, res) => {
           return;
         }
 
-        // Suporte a streaming/download de áudio gerado pelo Gemini TTS
-        const audioDownloadMatch = url.pathname.match(/^\/api\/v1\/media\/audio\/([^/]+)$/);
+        // Suporte a streaming/download de áudio gerado pelo Gemini TTS (ID estritamente alfanumérico)
+        const audioDownloadMatch = url.pathname.match(/^\/api\/v1\/media\/audio\/([a-zA-Z0-9_-]+)$/);
         if (req.method === 'GET' && audioDownloadMatch) {
           try {
             const audioId = decodeURIComponent(audioDownloadMatch[1]);
@@ -472,7 +477,7 @@ const server = http.createServer((req, res) => {
             res.setHeader('Content-Type', audioData.mimeType || 'audio/wav');
             res.setHeader('Content-Length', audioData.buffer.length);
             res.setHeader('Accept-Ranges', 'bytes');
-            res.setHeader('Cache-Control', 'public, max-age=86400');
+            res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
             res.end(audioData.buffer);
             return;
           } catch (err) {

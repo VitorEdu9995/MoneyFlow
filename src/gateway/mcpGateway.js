@@ -235,7 +235,7 @@ export class McpGateway {
           ? { status: result.status, tool: toolName, attachmentId: resultData.id || args.attachment_id }
           : result,
       });
-      return isExtension && toolName.startsWith('anexos_') ? result : redact(result);
+      return result;
       
     } catch (error) {
       logger.error(`Error executing tool ${toolName}`, error);
@@ -1460,32 +1460,35 @@ export class McpGateway {
     let cardId = null;
     let categoryId = null;
 
-    if (args.account_name) {
+    const targetAccount = args.account_name || args.account_id;
+    if (targetAccount) {
       const acc = this.service.db
         .prepare('SELECT id FROM accounts WHERE space_id = ? AND (id = ? OR name = ?)')
-        .get(authContext.spaceId, args.account_name, args.account_name);
+        .get(authContext.spaceId, targetAccount, targetAccount);
       if (!acc) {
-        throw new AppError(ErrorCodes.CROSS_SPACE_REFERENCE_DENIED, `Conta '${args.account_name}' não encontrada no espaço.`, 403);
+        throw new AppError(ErrorCodes.CROSS_SPACE_REFERENCE_DENIED, `Conta '${targetAccount}' não encontrada no espaço.`, 403);
       }
       accountId = acc.id;
     }
 
-    if (args.credit_card_name) {
+    const targetCard = args.credit_card_name || args.credit_card_id;
+    if (targetCard) {
       const card = this.service.db
         .prepare('SELECT id FROM credit_cards WHERE space_id = ? AND (id = ? OR name = ?)')
-        .get(authContext.spaceId, args.credit_card_name, args.credit_card_name);
+        .get(authContext.spaceId, targetCard, targetCard);
       if (!card) {
-        throw new AppError(ErrorCodes.CROSS_SPACE_REFERENCE_DENIED, `Cartão '${args.credit_card_name}' não encontrado no espaço.`, 403);
+        throw new AppError(ErrorCodes.CROSS_SPACE_REFERENCE_DENIED, `Cartão '${targetCard}' não encontrado no espaço.`, 403);
       }
       cardId = card.id;
     }
 
-    if (args.category_name) {
+    const targetCategory = args.category_name || args.category_id;
+    if (targetCategory) {
       const cat = this.service.db
         .prepare('SELECT id FROM categories WHERE space_id = ? AND (id = ? OR name = ?)')
-        .get(authContext.spaceId, args.category_name, args.category_name);
+        .get(authContext.spaceId, targetCategory, targetCategory);
       if (!cat) {
-        throw new AppError(ErrorCodes.CROSS_SPACE_REFERENCE_DENIED, `Categoria '${args.category_name}' não encontrada no espaço.`, 403);
+        throw new AppError(ErrorCodes.CROSS_SPACE_REFERENCE_DENIED, `Categoria '${targetCategory}' não encontrada no espaço.`, 403);
       }
       categoryId = cat.id;
     }
@@ -1523,12 +1526,13 @@ export class McpGateway {
     if (args.amount !== undefined) updates.amount = Math.round(args.amount * 100);
     if (args.notes !== undefined) updates.observation = args.notes;
 
-    if (args.category_name !== undefined) {
+    const targetCategory = args.category_name !== undefined ? args.category_name : args.category_id;
+    if (targetCategory !== undefined) {
       const cat = this.service.db
         .prepare('SELECT id FROM categories WHERE space_id = ? AND (id = ? OR name = ?)')
-        .get(authContext.spaceId, args.category_name, args.category_name);
+        .get(authContext.spaceId, targetCategory, targetCategory);
       if (!cat) {
-        throw new AppError(ErrorCodes.CROSS_SPACE_REFERENCE_DENIED, `Categoria '${args.category_name}' não encontrada.`, 403);
+        throw new AppError(ErrorCodes.CROSS_SPACE_REFERENCE_DENIED, `Categoria '${targetCategory}' não encontrada.`, 403);
       }
       updates.categoryId = cat.id;
     }

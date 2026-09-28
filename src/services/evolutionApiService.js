@@ -38,17 +38,10 @@ export class EvolutionApiService {
     };
   }
 
-  _recordDispatch({ spaceId, recipient, messageType, payloadSummary, status, externalMessageId = null, errorMessage = null }) {
-    if (!this.db) return;
-    try {
-      const id = randomUUID();
-      this.db.prepare(`
-        INSERT INTO message_dispatches (id, space_id, channel, recipient, message_type, payload_summary, status, external_message_id, error_message, dispatched_at)
-        VALUES (?, ?, 'whatsapp', ?, ?, ?, ?, ?, ?, datetime('now'))
-      `).run(id, spaceId || null, recipient, messageType, payloadSummary?.slice(0, 500) || '', status, externalMessageId, errorMessage);
-    } catch (err) {
-      logger.error('Falha ao registrar auditoria de mensagem disparada:', err);
-    }
+  _recordDispatch(_params) {
+    // Zero-storage: áudios e mensagens do WhatsApp não são armazenados no servidor
+    // para evitar acúmulo desnecessário de dados e preservar a memória da VPS.
+    return;
   }
 
   async testConnection({ instanceName = null } = {}) {

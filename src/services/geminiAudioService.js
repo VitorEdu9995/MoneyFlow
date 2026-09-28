@@ -40,15 +40,28 @@ export class GeminiAudioService {
    * @param {object} [options]
    * @param {string} [options.storageDir]
    */
-  constructor(db, settingsService, { storageDir = path.join(process.cwd(), '.data', 'audio'), fetchFn = globalThis.fetch } = {}) {
+  constructor(db, settingsService, { storageDir = null, fetchFn = globalThis.fetch } = {}) {
     this.db = db;
     this.settingsService = settingsService;
     this.storageDir = storageDir;
     this.fetch = fetchFn;
+    this._ephemeralAudioCache = new Map();
   }
 
-  async _ensureStorageDir() {
-    await fs.mkdir(this.storageDir, { recursive: true });
+  _cleanupEphemeralCache() {
+    const now = Date.now();
+    for (const [id, item] of this._ephemeralAudioCache.entries()) {
+      if (now > item.expiresAt) {
+        this._ephemeralAudioCache.delete(id);
+      }
+    }
+    // Limite estrito de no máximo 10 áudios transitórios na memória RAM para evitar vazamentos
+    if (this._ephemeralAudioCache.size > 10) {
+      const oldestKeys = Array.from(this._ephemeralAudioCache.keys()).slice(0, this._ephemeralAudioCache.size - 10);
+      for (const k of oldestKeys) {
+        this._ephemeralAudioCache.delete(k);
+      }
+    }
   }
 
   getApiKey() {
@@ -108,7 +121,7 @@ export class GeminiAudioService {
   }
 
   /**
-   * Gera áudio via Gemini Text-to-Speech (TTS).
+   * Gera áudio via Gemini Text-to-Speech (TTS) em memória sem retenção em disco ou banco.
    */
   async generateAudio({
     text,
@@ -126,8 +139,6 @@ export class GeminiAudioService {
     const selectedModel = model || this.getDefaultModel();
     const apiKey = this.getApiKey();
 
-    await this._ensureStorageDir();
-
     // Modo Mock para testes sem conexão de rede ou sem chave real
     if (mock || !apiKey || apiKey.startsWith('test-') || apiKey === 'dummy-key') {
       if (!apiKey && !mock) {
@@ -141,15 +152,14 @@ export class GeminiAudioService {
       const id = randomUUID();
       const mockWav = createMockWavBuffer();
       const fileName = `audio-${id}.wav`;
-      const filePath = path.join(this.storageDir, fileName);
-      await fs.writeFile(filePath, mockWav);
 
-      if (this.db) {
-        this.db.prepare(`
-          INSERT INTO audio_generations (id, space_id, text_prompt, voice_name, model, mime_type, storage_key, byte_size, created_at)
-          VALUES (?, ?, ?, ?, ?, 'audio/wav', ?, ?, datetime('now'))
-        `).run(id, spaceId || null, text.slice(0, 500), selectedVoice, selectedModel, fileName, mockWav.length);
-      }
+      this._cleanupEphemeralCache();
+      this._ephemeralAudioCache.set(id, {
+        buffer: mockWav,
+        mimeType: 'audio/wav',
+        fileName,
+        expiresAt: Date.now() + 60_000,
+      });
 
       return {
         audio_id: id,
@@ -215,17 +225,16 @@ export class GeminiAudioService {
 
       const id = randomUUID();
       const fileName = `audio-${id}.${ext}`;
-      const filePath = path.join(this.storageDir, fileName);
-      await fs.writeFile(filePath, audioBuffer);
 
-      if (this.db) {
-        this.db.prepare(`
-          INSERT INTO audio_generations (id, space_id, text_prompt, voice_name, model, mime_type, storage_key, byte_size, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-        `).run(id, spaceId || null, text.slice(0, 500), selectedVoice, selectedModel, mimeType, fileName, audioBuffer.length);
-      }
+      this._cleanupEphemeralCache();
+      this._ephemeralAudioCache.set(id, {
+        buffer: audioBuffer,
+        mimeType,
+        fileName,
+        expiresAt: Date.now() + 60_000,
+      });
 
-      logger.info('Áudio Gemini gerado com sucesso', { audioId: id, voice: selectedVoice, size: audioBuffer.length });
+      logger.info('Áudio Gemini gerado com sucesso (efêmero em memória)', { audioId: id, voice: selectedVoice, size: audioBuffer.length });
 
       return {
         audio_id: id,
@@ -244,22 +253,24 @@ export class GeminiAudioService {
   }
 
   async getAudioFile(audioId) {
-    if (!audioId) throw new AppError(ErrorCodes.NOT_FOUND, 'ID de áudio não fornecido.', 404);
-    const row = this.db?.prepare('SELECT * FROM audio_generations WHERE id = ?').get(audioId);
-    
-    // Tenta carregar do arquivo
-    const fileName = row ? row.storage_key : `audio-${audioId}.wav`;
-    const filePath = path.join(this.storageDir, fileName);
-
-    try {
-      const buffer = await fs.readFile(filePath);
-      return {
-        buffer,
-        mimeType: row?.mime_type || 'audio/wav',
-        fileName,
-      };
-    } catch {
-      throw new AppError(ErrorCodes.NOT_FOUND, 'Arquivo de áudio não encontrado no servidor.', 404);
+    if (!audioId || typeof audioId !== 'string') {
+      throw new AppError(ErrorCodes.NOT_FOUND, 'ID de áudio não fornecido.', 404);
     }
+    const sanitizedId = audioId.replace(/[^a-zA-Z0-9_-]/g, '');
+    if (!sanitizedId) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, 'ID de áudio inválido.', 400);
+    }
+
+    this._cleanupEphemeralCache();
+    const item = this._ephemeralAudioCache.get(sanitizedId);
+    if (!item || Date.now() > item.expiresAt) {
+      throw new AppError(ErrorCodes.NOT_FOUND, 'Arquivo de áudio não encontrado ou já expirado.', 404);
+    }
+
+    return {
+      buffer: item.buffer,
+      mimeType: item.mimeType,
+      fileName: item.fileName,
+    };
   }
 }
